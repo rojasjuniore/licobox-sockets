@@ -13,8 +13,8 @@ const io = new Server(httpServer, {
       "http://localhost:4200",
       "http://localhost:3001",
       "http://localhost:5173",
-      "https://licobox-sockets-production.up.railway.app", // Agregamos el dominio de producción
-      "https://licobox-sockets-production.up.railway.app:6533", // También el puerto seguro
+      "https://licobox-sockets-production.up.railway.app",
+      "https://licobox-sockets-production.up.railway.app:6533",
     ],
     methods: ["GET", "POST"],
     credentials: true,
@@ -27,114 +27,89 @@ interface Client {
   type: "controller" | "tv";
 }
 
+interface PlaybackState {
+  currentSong: any;
+  currentIndex: number;
+  isPlaying: boolean;
+  playlist: any[];
+  currentTime: number;
+  duration: number;
+  timestamp: number;
+}
+
 const clients: Client[] = [];
+let currentState: PlaybackState | null = null;
 
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
-  socket.on("requestCurrentState", () => {
-    const tvClient = clients.find((client) => client.type === "tv");
-    if (tvClient) {
-      io.to(tvClient.id).emit("requestCurrentState");
-    }
-  });
-
+  // Manejar la identificación del cliente
   socket.on("identify", (info) => {
     const clientType = info.type;
     const existingClient = clients.find((c) => c.id === socket.id);
 
     if (!existingClient) {
       clients.push({ id: socket.id, type: clientType });
+      console.log(`New ${clientType} identified:`, socket.id);
 
-      if (clientType === "controller") {
-        const tvClient = clients.find((client) => client.type === "tv");
-        if (tvClient) {
-          // Solicitar estado actual al TV y esperar respuesta
-          io.to(tvClient.id).emit("requestCurrentState");
-        }
+      // Si es un controlador, enviar el estado actual si existe
+      if (clientType === "controller" && currentState) {
+        socket.emit("currentState", currentState);
       }
 
+      // Si es TV y hay estado actual, sincronizar
+      if (clientType === "tv" && currentState) {
+        socket.emit("syncRequest", currentState);
+      }
+
+      // Notificar a los controladores que un TV se conectó
       if (clientType === "tv") {
-        // Asegurarse de que el TV envíe su estado completo
-        socket.emit("requestCurrentState");
-        clients
-          .filter((client) => client.type === "controller")
-          .forEach((controller) => {
-            io.to(controller.id).emit("clientConnected", { type: "tv" });
-          });
+        const controllers = clients.filter(client => client.type === "controller");
+        controllers.forEach(controller => {
+          io.to(controller.id).emit("tvConnected");
+        });
       }
     }
   });
 
-  // Modificar el manejo de playbackStatus para incluir toda la información necesaria
-  socket.on("playbackStatus", (status) => {
-    const controllerClients = clients.filter(
-      (client) => client.type === "controller"
-    );
-    // Asegurarse de que el estado incluya toda la información necesaria
-    const fullStatus = {
-      ...status,
-      currentIndex: status.currentIndex || 0,
-      playlist: status.playlist || [],
-      timestamp: Date.now(),
-    };
-
-    controllerClients.forEach((client) => {
-      io.to(client.id).emit("playbackStatus", fullStatus);
+  // Manejar actualización de estado del TV
+  socket.on("tvStateUpdate", (state: PlaybackState) => {
+    currentState = state;
+    const controllers = clients.filter(client => client.type === "controller");
+    controllers.forEach(controller => {
+      io.to(controller.id).emit("currentState", state);
     });
   });
 
-  // Manejar comandos del controlador al TV
+  // Manejar comandos del controlador
   socket.on("command", (command) => {
-    const tvClients = clients.filter((client) => client.type === "tv");
-    tvClients.forEach((client) => {
+    const tvClients = clients.filter(client => client.type === "tv");
+    tvClients.forEach(client => {
       io.to(client.id).emit("command", command);
     });
   });
 
-  // Manejar estado del controlador
-  socket.on("controllerState", (state) => {
-    const tvClients = clients.filter((client) => client.type === "tv");
-    tvClients.forEach((client) => {
-      io.to(client.id).emit("controllerState", state);
-    });
+  // Manejar solicitud de estado actual
+  socket.on("requestCurrentState", () => {
+    const tvClient = clients.find(client => client.type === "tv");
+    if (tvClient) {
+      io.to(tvClient.id).emit("requestCurrentState");
+    }
   });
 
-  // Manejar estado de reproducción del TV
-  socket.on("playbackStatus", (status) => {
-    const controllerClients = clients.filter(
-      (client) => client.type === "controller"
-    );
-    controllerClients.forEach((client) => {
-      io.to(client.id).emit("playbackStatus", status);
-    });
-  });
-
-  // Cuando el TV envía su estado actual
-  socket.on("currentTVState", (state) => {
-    const controllerClients = clients.filter(
-      (client) => client.type === "controller"
-    );
-    controllerClients.forEach((client) => {
-      io.to(client.id).emit("currentState", state);
-    });
-  });
-
-  // Manejar desconexión con notificación
+  // Manejar desconexión
   socket.on("disconnect", () => {
-    const index = clients.findIndex((client) => client.id === socket.id);
+    const index = clients.findIndex(client => client.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
       clients.splice(index, 1);
-      console.log(`${disconnectedClient.type} client disconnected:`, socket.id);
+      console.log(`${disconnectedClient.type} disconnected:`, socket.id);
 
-      // Notificar a los clientes restantes sobre la desconexión
+      // Si se desconecta el TV, notificar a los controladores
       if (disconnectedClient.type === "tv") {
-        const controllerClients = clients.filter(
-          (client) => client.type === "controller"
-        );
-        controllerClients.forEach((client) => {
-          io.to(client.id).emit("tvDisconnected");
+        const controllers = clients.filter(client => client.type === "controller");
+        controllers.forEach(controller => {
+          io.to(controller.id).emit("tvDisconnected");
         });
       }
     }
