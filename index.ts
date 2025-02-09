@@ -13,9 +13,12 @@ const io = new Server(httpServer, {
       "http://localhost:4200",
       "http://localhost:3001",
       "http://localhost:5173",
-    ], // Angular y React URLs
+      "https://licobox-sockets-production.up.railway.app", // Agregamos el dominio de producción
+      "https://licobox-sockets-production.up.railway.app:6533", // También el puerto seguro
+    ],
     methods: ["GET", "POST"],
     credentials: true,
+    allowedHeaders: [],
   },
 });
 
