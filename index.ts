@@ -43,7 +43,6 @@ let currentState: PlaybackState | null = null;
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
-  // Manejar la identificación del cliente
   socket.on("identify", (info) => {
     const clientType = info.type;
     const existingClient = clients.find((c) => c.id === socket.id);
@@ -64,8 +63,10 @@ io.on("connection", (socket) => {
 
       // Notificar a los controladores que un TV se conectó
       if (clientType === "tv") {
-        const controllers = clients.filter(client => client.type === "controller");
-        controllers.forEach(controller => {
+        const controllers = clients.filter(
+          (client) => client.type === "controller"
+        );
+        controllers.forEach((controller) => {
           io.to(controller.id).emit("tvConnected");
         });
       }
@@ -74,32 +75,59 @@ io.on("connection", (socket) => {
 
   // Manejar actualización de estado del TV
   socket.on("tvStateUpdate", (state: PlaybackState) => {
-    currentState = state;
-    const controllers = clients.filter(client => client.type === "controller");
-    controllers.forEach(controller => {
-      io.to(controller.id).emit("currentState", state);
+    currentState = { ...state, timestamp: Date.now() };
+    // Enviar el estado actualizado a todos los controladores excepto al que envió el comando
+    const controllers = clients.filter(
+      (client) => client.type === "controller" && client.id !== socket.id
+    );
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("currentState", currentState);
     });
   });
 
   // Manejar comandos del controlador
   socket.on("command", (command) => {
-    const tvClients = clients.filter(client => client.type === "tv");
-    tvClients.forEach(client => {
-      io.to(client.id).emit("command", command);
+    // Actualizar el estado actual con el comando
+    if (command.action === "updatePlaylist" || command.action === "forceSync") {
+      currentState = {
+        ...currentState,
+        playlist: command.playlist,
+        currentSong: command.currentSong,
+        currentIndex: command.currentIndex,
+        isPlaying: command.isPlaying,
+        timestamp: Date.now(),
+      } as any;
+    }
+
+    // Enviar el comando a todos los TVs
+    const tvClients = clients.filter((client) => client.type === "tv");
+    tvClients.forEach((client) => {
+      io.to(client.id).emit("command", { ...command, timestamp: Date.now() });
+    });
+
+    // Enviar actualización a otros controladores
+    const otherControllers = clients.filter(
+      (client) => client.type === "controller" && client.id !== socket.id
+    );
+    otherControllers.forEach((controller) => {
+      io.to(controller.id).emit("currentState", currentState);
     });
   });
 
   // Manejar solicitud de estado actual
   socket.on("requestCurrentState", () => {
-    const tvClient = clients.find(client => client.type === "tv");
+    const tvClient = clients.find((client) => client.type === "tv");
     if (tvClient) {
       io.to(tvClient.id).emit("requestCurrentState");
+    } else if (currentState) {
+      // Si no hay TV conectado pero tenemos un estado guardado, enviarlo
+      socket.emit("currentState", currentState);
     }
   });
 
   // Manejar desconexión
   socket.on("disconnect", () => {
-    const index = clients.findIndex(client => client.id === socket.id);
+    const index = clients.findIndex((client) => client.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
       clients.splice(index, 1);
@@ -107,8 +135,10 @@ io.on("connection", (socket) => {
 
       // Si se desconecta el TV, notificar a los controladores
       if (disconnectedClient.type === "tv") {
-        const controllers = clients.filter(client => client.type === "controller");
-        controllers.forEach(controller => {
+        const controllers = clients.filter(
+          (client) => client.type === "controller"
+        );
+        controllers.forEach((controller) => {
           io.to(controller.id).emit("tvDisconnected");
         });
       }
