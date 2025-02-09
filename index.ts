@@ -73,22 +73,23 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Manejar actualización de estado del TV
-  socket.on("tvStateUpdate", (state: PlaybackState) => {
-    currentState = { ...state, timestamp: Date.now() };
-    // Enviar el estado actualizado a todos los controladores excepto al que envió el comando
-    const controllers = clients.filter(
-      (client) => client.type === "controller" && client.id !== socket.id
-    );
-    controllers.forEach((controller) => {
-      io.to(controller.id).emit("currentState", currentState);
-    });
-  });
-
   // Manejar comandos del controlador
+  // Modificar el manejo de comandos
   socket.on("command", (command) => {
     // Actualizar el estado actual con el comando
-    if (command.action === "updatePlaylist" || command.action === "forceSync") {
+    if (command.action === "changeSong") {
+      currentState = {
+        ...currentState,
+        currentSong: command.currentSong,
+        currentIndex: command.index,
+        isPlaying: command.isPlaying,
+        currentTime: command.currentTime || 0,
+        timestamp: Date.now(),
+      } as PlaybackState;
+    } else if (
+      command.action === "updatePlaylist" ||
+      command.action === "forceSync"
+    ) {
       currentState = {
         ...currentState,
         playlist: command.playlist,
@@ -96,7 +97,7 @@ io.on("connection", (socket) => {
         currentIndex: command.currentIndex,
         isPlaying: command.isPlaying,
         timestamp: Date.now(),
-      } as any;
+      } as PlaybackState;
     }
 
     // Enviar el comando a todos los TVs
@@ -110,6 +111,30 @@ io.on("connection", (socket) => {
       (client) => client.type === "controller" && client.id !== socket.id
     );
     otherControllers.forEach((controller) => {
+      io.to(controller.id).emit("currentState", currentState);
+    });
+  });
+
+  // Modificar el manejo de actualizaciones del TV
+  socket.on("tvStateUpdate", (state: PlaybackState) => {
+    currentState = { ...state, timestamp: Date.now() };
+
+    // Enviar actualizaciones de tiempo más frecuentes a los controladores
+    const controllers = clients.filter(
+      (client) => client.type === "controller"
+    );
+
+    if (state.currentTime !== undefined) {
+      controllers.forEach((controller) => {
+        io.to(controller.id).emit("timeUpdate", {
+          currentTime: state.currentTime,
+          duration: state.duration,
+        });
+      });
+    }
+
+    // Enviar actualizaciones completas de estado menos frecuentemente
+    controllers.forEach((controller) => {
       io.to(controller.id).emit("currentState", currentState);
     });
   });
