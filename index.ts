@@ -300,22 +300,37 @@ io.on("connection", (socket) => {
   });
 
   // Modificar el handler de tvStateUpdate
-  socket.on("tvStateUpdate", (state: PlaybackState) => {
-    // Actualizar el estado actual
-    if (state.tvId) {
-      currentState = {
-        ...currentState,
-        ...state,
-      };
+  socket.on("tvStateUpdate", (state) => {
+    // Actualizar el estado del TV en la lista de clientes
+    const tvClient = clients.find(c => c.id === socket.id);
+    if (tvClient) {
+      tvClient.state = state.state;
+      tvClient.name = state.name; // Asegurarse de mantener el nombre actualizado
     }
 
     // Notificar a los controladores
-    const controllers = clients.filter((c) => c.type === "controller");
-    controllers.forEach((controller) => {
+    const controllers = clients.filter(c => c.type === "controller");
+    controllers.forEach(controller => {
       io.to(controller.id).emit("tvStateUpdate", {
         ...state,
-        tvId: socket.id,
+        tvId: socket.id
       });
+
+      // Enviar lista actualizada de TVs
+      io.to(controller.id).emit("tvListUpdate", 
+        clients
+          .filter(c => c.type === "tv")
+          .map(tv => ({
+            id: tv.id,
+            name: tv.name,
+            state: tv.state,
+            isHost: tv.isHost || false,
+            currentSong: tv.state?.currentSong,
+            isPlaying: tv.state?.isPlaying,
+            currentTime: tv.state?.currentTime,
+            duration: tv.state?.duration
+          }))
+      );
     });
   });
 
