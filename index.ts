@@ -299,11 +299,13 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Modificar el handler de playlistUpdate
   socket.on("playlistUpdate", (data: any) => {
     const targetTvIds = data.isSyncMode
       ? clients.filter((c) => c.type === "tv").map((tv) => tv.id)
       : [data.tvId];
 
+    // Actualizar el estado actual
     currentState = {
       ...currentState,
       playlist: data.playlist,
@@ -319,7 +321,7 @@ io.on("connection", (socket) => {
       });
     });
 
-    // Actualizar controladores
+    // Actualizar todos los controladores
     const controllers = clients.filter((c) => c.type === "controller");
     controllers.forEach((controller) => {
       io.to(controller.id).emit("playlistUpdate", {
@@ -327,6 +329,26 @@ io.on("connection", (socket) => {
         currentSong: data.currentSong,
         tvId: data.tvId,
         isSyncMode: data.isSyncMode,
+      });
+    });
+  });
+
+  // Modificar el handler de tvStateUpdate
+  socket.on("tvStateUpdate", (state: PlaybackState) => {
+    // Actualizar el estado actual
+    if (state.tvId) {
+      currentState = {
+        ...currentState,
+        ...state,
+      };
+    }
+
+    // Notificar a los controladores
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("tvStateUpdate", {
+        ...state,
+        tvId: socket.id,
       });
     });
   });
