@@ -46,10 +46,6 @@ interface SyncState extends PlaybackState {
   networkLatency: number;
 }
 
-const calculateNetworkLatency = (clientTimestamp: number): number => {
-  return (Date.now() - clientTimestamp) / 2;
-};
-
 const clients: Client[] = [];
 let currentState: PlaybackState | null = null;
 let syncEnabled = false;
@@ -164,6 +160,14 @@ io.on("connection", (socket) => {
   });
 
   socket.on("tvStateUpdate", (state: PlaybackState) => {
+    // Actualizar el estado actual
+    if (state.tvId) {
+      currentState = {
+        ...currentState,
+        ...state,
+      };
+    }
+
     if (syncEnabled) {
       // Propagar el estado a todos los TVs excepto al emisor
       const otherTvs = clients.filter(
@@ -181,6 +185,11 @@ io.on("connection", (socket) => {
         tvId: socket.id,
         currentTime: state.currentTime,
         duration: state.duration,
+      });
+
+      io.to(controller.id).emit("tvStateUpdate", {
+        ...state,
+        tvId: socket.id,
       });
     });
   });
@@ -256,6 +265,7 @@ io.on("connection", (socket) => {
       });
     }
   });
+
   socket.on("masterSync", (state: SyncState) => {
     if (hostTvId === socket.id) {
       const slaves = clients.filter(
@@ -279,6 +289,61 @@ io.on("connection", (socket) => {
         });
       });
     }
+  });
+
+  // Añadir nuevo handler para solicitud de estado
+  socket.on("requestTVState", (data: any) => {
+    const targetTv = clients.find((c) => c.id === data.tvId);
+    if (targetTv) {
+      io.to(data.tvId).emit("getState");
+    }
+  });
+
+  socket.on("playlistUpdate", (data: any) => {
+    const targetTvIds = data.isSyncMode
+      ? clients.filter((c) => c.type === "tv").map((tv) => tv.id)
+      : [data.tvId];
+
+    currentState = {
+      ...currentState,
+      playlist: data.playlist,
+      currentIndex: data.currentSong,
+    } as PlaybackState;
+
+    targetTvIds.forEach((tvId) => {
+      io.to(tvId).emit("playlistUpdate", {
+        playlist: data.playlist,
+        currentSong: data.currentSong,
+        tvId: data.tvId,
+        isSyncMode: data.isSyncMode,
+      });
+    });
+
+    // Actualizar controladores
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("playlistUpdate", {
+        playlist: data.playlist,
+        currentSong: data.currentSong,
+        tvId: data.tvId,
+        isSyncMode: data.isSyncMode,
+      });
+    });
+  });
+
+  socket.on("seek", (data: any) => {
+    const targetTvIds = data.isSyncMode
+      ? clients.filter((c) => c.type === "tv").map((tv) => tv.id)
+      : [data.tvId];
+
+    targetTvIds.forEach((tvId) => {
+      io.to(tvId).emit("seek", {
+        time: data.time,
+        tvId: data.tvId,
+        isSyncMode: data.isSyncMode,
+        timestamp: Date.now(),
+      });
+    });
   });
 
   socket.on("command", (command) => {
