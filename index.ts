@@ -74,43 +74,46 @@ const selectNewHost = () => {
 io.on("connection", (socket) => {
   socket.on("identify", (info) => {
     const clientType = info.type;
-    const clientName = info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
+    const clientName =
+      info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
 
-    const existingClient = clients.find(c => c.id === socket.id);
+    const existingClient = clients.find((c) => c.id === socket.id);
     if (!existingClient) {
       const newClient: Client = {
         id: socket.id,
         type: clientType,
         name: clientName,
-        state: info.state || {}
+        state: info.state || {},
       };
       clients.push(newClient);
-  
+
       // Notificar a los controladores sobre el nuevo TV
       if (clientType === "tv") {
-        const controllers = clients.filter(c => c.type === "controller");
-        controllers.forEach(controller => {
-          io.to(controller.id).emit("tvListUpdate", 
+        const controllers = clients.filter((c) => c.type === "controller");
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit(
+            "tvListUpdate",
             clients
-              .filter(c => c.type === "tv")
-              .map(tv => ({
+              .filter((c) => c.type === "tv")
+              .map((tv) => ({
                 id: tv.id,
                 name: tv.name,
-                state: tv.state || {}
+                state: tv.state || {},
               }))
           );
         });
       }
-  
+
       // Enviar lista de TVs al nuevo controlador
       if (clientType === "controller") {
-        socket.emit("tvListUpdate", 
+        socket.emit(
+          "tvListUpdate",
           clients
-            .filter(c => c.type === "tv")
-            .map(tv => ({
+            .filter((c) => c.type === "tv")
+            .map((tv) => ({
               id: tv.id,
               name: tv.name,
-              state: tv.state || {}
+              state: tv.state || {},
             }))
         );
         socket.emit("syncStatus", syncEnabled);
@@ -177,34 +180,6 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("tvStateUpdate", (state) => {
-    // Actualizar el estado del TV en la lista de clientes
-    const tvClient = clients.find(c => c.id === socket.id);
-    if (tvClient) {
-      tvClient.state = state.state;
-    }
-  
-    // Notificar a los controladores
-    const controllers = clients.filter(c => c.type === "controller");
-    controllers.forEach(controller => {
-      io.to(controller.id).emit("tvStateUpdate", {
-        ...state,
-        tvId: socket.id
-      });
-  
-      // Enviar lista actualizada de TVs
-      io.to(controller.id).emit("tvListUpdate", 
-        clients
-          .filter(c => c.type === "tv")
-          .map(tv => ({
-            id: tv.id,
-            name: tv.name,
-            state: tv.state
-          }))
-      );
-    });
-  });
-
   // Modificar el manejador de desconexión
   socket.on("disconnect", () => {
     const index = clients.findIndex((c) => c.id === socket.id);
@@ -255,26 +230,6 @@ io.on("connection", (socket) => {
     controllers.forEach((controller) => {
       io.to(controller.id).emit("currentState", currentState);
     });
-  });
-
-  // Modificar el handler de command
-  socket.on("command", (command) => {
-    if (syncEnabled) {
-      command.synchronized = true;
-      command.timestamp = Date.now();
-
-      // Enviar a todos los TVs
-      const tvs = clients.filter((c) => c.type === "tv");
-      tvs.forEach((tv) => {
-        io.to(tv.id).emit("command", command);
-      });
-    } else if (command.tvIds) {
-      // Modo individual
-      command.timestamp = Date.now();
-      command.tvIds.forEach((tvId: string) => {
-        io.to(tvId).emit("command", command);
-      });
-    }
   });
 
   socket.on("masterSync", (state: SyncState) => {
@@ -438,6 +393,20 @@ io.on("connection", (socket) => {
       });
     }
   });
+
+  socket.on("reconnect", (attemptNumber) => {
+    // Restaurar estado del cliente
+    const client = clients.find((c) => c.id === socket.id);
+    if (client) {
+      socket.emit("restoreState", currentState);
+    }
+  });
+
+  // Mejorar el manejo de errores
+  socket.on("error", (error) => {
+    console.error("Socket error:", error);
+    // Notificar a los clientes afectados
+  });
 });
 
 const PORT = process.env.PORT || 3000;
@@ -445,3 +414,9 @@ const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
   console.log(`Socket.IO server running on port ${PORT}`);
 });
+
+setInterval(() => {
+  clients.forEach((client) => {
+    io.to(client.id).emit("ping");
+  });
+}, 30000);
