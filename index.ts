@@ -26,7 +26,14 @@ interface Client {
   id: string;
   type: "controller" | "tv";
   name?: string;
-  isHost?: boolean; // Nuevo campo para identificar el TV host
+  isHost?: boolean;
+  state?: {
+    currentTime?: number;
+    duration?: number;
+    isPlaying?: boolean;
+    playlist?: any[];
+    currentSong?: number;
+  };
 }
 
 interface PlaybackState {
@@ -67,33 +74,44 @@ const selectNewHost = () => {
 io.on("connection", (socket) => {
   socket.on("identify", (info) => {
     const clientType = info.type;
-    const clientName =
-      info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
+    const clientName = info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
 
-    if (!clients.find((c) => c.id === socket.id)) {
-      const newClient = {
+    const existingClient = clients.find(c => c.id === socket.id);
+    if (!existingClient) {
+      const newClient: Client = {
         id: socket.id,
         type: clientType,
         name: clientName,
+        state: info.state || {}
       };
       clients.push(newClient);
-
+  
       // Notificar a los controladores sobre el nuevo TV
       if (clientType === "tv") {
-        const controllers = clients.filter((c) => c.type === "controller");
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit(
-            "tvListUpdate",
-            clients.filter((c) => c.type === "tv")
+        const controllers = clients.filter(c => c.type === "controller");
+        controllers.forEach(controller => {
+          io.to(controller.id).emit("tvListUpdate", 
+            clients
+              .filter(c => c.type === "tv")
+              .map(tv => ({
+                id: tv.id,
+                name: tv.name,
+                state: tv.state || {}
+              }))
           );
         });
       }
-
+  
       // Enviar lista de TVs al nuevo controlador
       if (clientType === "controller") {
-        socket.emit(
-          "tvListUpdate",
-          clients.filter((c) => c.type === "tv")
+        socket.emit("tvListUpdate", 
+          clients
+            .filter(c => c.type === "tv")
+            .map(tv => ({
+              id: tv.id,
+              name: tv.name,
+              state: tv.state || {}
+            }))
         );
         socket.emit("syncStatus", syncEnabled);
       }
@@ -159,38 +177,31 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("tvStateUpdate", (state: PlaybackState) => {
-    // Actualizar el estado actual
-    if (state.tvId) {
-      currentState = {
-        ...currentState,
-        ...state,
-      };
+  socket.on("tvStateUpdate", (state) => {
+    // Actualizar el estado del TV en la lista de clientes
+    const tvClient = clients.find(c => c.id === socket.id);
+    if (tvClient) {
+      tvClient.state = state.state;
     }
-
-    if (syncEnabled) {
-      // Propagar el estado a todos los TVs excepto al emisor
-      const otherTvs = clients.filter(
-        (c) => c.type === "tv" && c.id !== socket.id
-      );
-      otherTvs.forEach((tv) => {
-        io.to(tv.id).emit("syncState", state);
-      });
-    }
-
-    // Actualizar controladores
-    const controllers = clients.filter((c) => c.type === "controller");
-    controllers.forEach((controller) => {
-      io.to(controller.id).emit("timeUpdate", {
-        tvId: socket.id,
-        currentTime: state.currentTime,
-        duration: state.duration,
-      });
-
+  
+    // Notificar a los controladores
+    const controllers = clients.filter(c => c.type === "controller");
+    controllers.forEach(controller => {
       io.to(controller.id).emit("tvStateUpdate", {
         ...state,
-        tvId: socket.id,
+        tvId: socket.id
       });
+  
+      // Enviar lista actualizada de TVs
+      io.to(controller.id).emit("tvListUpdate", 
+        clients
+          .filter(c => c.type === "tv")
+          .map(tv => ({
+            id: tv.id,
+            name: tv.name,
+            state: tv.state
+          }))
+      );
     });
   });
 
