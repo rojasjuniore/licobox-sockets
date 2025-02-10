@@ -25,6 +25,8 @@ const io = new Server(httpServer, {
 interface Client {
   id: string;
   type: "controller" | "tv";
+  name?: string; // Identificador amigable para el TV
+  groupId?: string; // Para identificar grupos de TVs sincronizados
 }
 
 interface PlaybackState {
@@ -35,136 +37,146 @@ interface PlaybackState {
   currentTime: number;
   duration: number;
   timestamp: number;
+  tvId?: string; // ID del TV que envía el estado
 }
 
 const clients: Client[] = [];
 let currentState: PlaybackState | null = null;
+let syncEnabled = false; // Estado global de sincronización
 
 io.on("connection", (socket) => {
-  console.log("New client connected:", socket.id);
-
   socket.on("identify", (info) => {
     const clientType = info.type;
-    const existingClient = clients.find((c) => c.id === socket.id);
+    const clientName =
+      info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
 
-    if (!existingClient) {
-      clients.push({ id: socket.id, type: clientType });
-      console.log(`New ${clientType} identified:`, socket.id);
+    if (!clients.find((c) => c.id === socket.id)) {
+      const newClient = {
+        id: socket.id,
+        type: clientType,
+        name: clientName,
+      };
+      clients.push(newClient);
 
-      // Si es un controlador, enviar el estado actual si existe
-      if (clientType === "controller" && currentState) {
-        socket.emit("currentState", currentState);
-      }
-
-      // Si es TV y hay estado actual, sincronizar
-      if (clientType === "tv" && currentState) {
-        socket.emit("syncRequest", currentState);
-      }
-
-      // Notificar a los controladores que un TV se conectó
+      // Notificar a los controladores sobre el nuevo TV
       if (clientType === "tv") {
-        const controllers = clients.filter(
-          (client) => client.type === "controller"
-        );
+        const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvConnected");
+          io.to(controller.id).emit(
+            "tvListUpdate",
+            clients.filter((c) => c.type === "tv")
+          );
         });
+      }
+
+      // Enviar lista de TVs al nuevo controlador
+      if (clientType === "controller") {
+        socket.emit(
+          "tvListUpdate",
+          clients.filter((c) => c.type === "tv")
+        );
+        socket.emit("syncStatus", syncEnabled);
       }
     }
   });
 
-  // Manejar comandos del controlador
-  // Modificar el manejo de comandos
+  // Nuevo manejador para toggle de sincronización
+  socket.on("toggleSync", (enabled: boolean) => {
+    syncEnabled = enabled;
+    // Notificar a todos los controladores
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("syncStatus", syncEnabled);
+    });
+  });
+
   socket.on("command", (command) => {
-    // Actualizar el estado actual con el comando
-    if (command.action === "changeSong") {
-      currentState = {
-        ...currentState,
-        currentSong: command.currentSong,
-        currentIndex: command.index,
-        isPlaying: command.isPlaying,
-        currentTime: command.currentTime || 0,
-        timestamp: Date.now(),
-      } as PlaybackState;
-    } else if (
+    const targetTvIds =
+      command.tvIds ||
+      clients.filter((c) => c.type === "tv").map((tv) => tv.id);
+
+    if (
+      command.action === "changeSong" ||
       command.action === "updatePlaylist" ||
       command.action === "forceSync"
     ) {
       currentState = {
         ...currentState,
-        playlist: command.playlist,
-        currentSong: command.currentSong,
-        currentIndex: command.currentIndex,
-        isPlaying: command.isPlaying,
+        ...command,
         timestamp: Date.now(),
       } as PlaybackState;
     }
 
-    // Enviar el comando a todos los TVs
-    const tvClients = clients.filter((client) => client.type === "tv");
-    tvClients.forEach((client) => {
-      io.to(client.id).emit("command", { ...command, timestamp: Date.now() });
-    });
-
-    // Enviar actualización a otros controladores
-    const otherControllers = clients.filter(
-      (client) => client.type === "controller" && client.id !== socket.id
-    );
-    otherControllers.forEach((controller) => {
-      io.to(controller.id).emit("currentState", currentState);
-    });
-  });
-
-  // Modificar el manejo de actualizaciones del TV
-  socket.on("tvStateUpdate", (state: PlaybackState) => {
-    currentState = { ...state, timestamp: Date.now() };
-
-    // Enviar actualizaciones de tiempo más frecuentes a los controladores
-    const controllers = clients.filter(
-      (client) => client.type === "controller"
-    );
-
-    if (state.currentTime !== undefined) {
-      controllers.forEach((controller) => {
-        io.to(controller.id).emit("timeUpdate", {
-          currentTime: state.currentTime,
-          duration: state.duration,
+    // Si la sincronización está activada o es un comando de sincronización forzada
+    if (syncEnabled || command.action === "forceSync") {
+      // Enviar a todos los TVs
+      targetTvIds.forEach((tvId: any) => {
+        io.to(tvId).emit("command", {
+          ...command,
+          timestamp: Date.now(),
+          synchronized: true,
+        });
+      });
+    } else {
+      // Enviar solo a los TVs especificados
+      targetTvIds.forEach((tvId: any) => {
+        io.to(tvId).emit("command", {
+          ...command,
+          timestamp: Date.now(),
         });
       });
     }
 
-    // Enviar actualizaciones completas de estado menos frecuentemente
-    controllers.forEach((controller) => {
-      io.to(controller.id).emit("currentState", currentState);
+    // Actualizar otros controladores
+    const otherControllers = clients.filter(
+      (c) => c.type === "controller" && c.id !== socket.id
+    );
+    otherControllers.forEach((controller) => {
+      io.to(controller.id).emit("currentState", {
+        ...currentState,
+        tvIds: targetTvIds,
+      });
     });
   });
 
-  // Manejar solicitud de estado actual
-  socket.on("requestCurrentState", () => {
-    const tvClient = clients.find((client) => client.type === "tv");
-    if (tvClient) {
-      io.to(tvClient.id).emit("requestCurrentState");
-    } else if (currentState) {
-      // Si no hay TV conectado pero tenemos un estado guardado, enviarlo
-      socket.emit("currentState", currentState);
+  socket.on("tvStateUpdate", (state: PlaybackState) => {
+    if (syncEnabled) {
+      // Propagar el estado a todos los TVs excepto al emisor
+      const otherTvs = clients.filter(
+        (c) => c.type === "tv" && c.id !== socket.id
+      );
+      otherTvs.forEach((tv) => {
+        io.to(tv.id).emit("syncState", state);
+      });
     }
+
+    // Actualizar controladores
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("timeUpdate", {
+        tvId: socket.id,
+        currentTime: state.currentTime,
+        duration: state.duration,
+      });
+    });
   });
 
-  // Manejar desconexión
+  // Modificar el manejador de desconexión
   socket.on("disconnect", () => {
-    const index = clients.findIndex((client) => client.id === socket.id);
+    const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
       clients.splice(index, 1);
-      console.log(`${disconnectedClient.type} disconnected:`, socket.id);
 
-      // Si se desconecta el TV, notificar a los controladores
       if (disconnectedClient.type === "tv") {
-        const controllers = clients.filter(
-          (client) => client.type === "controller"
-        );
+        // Actualizar lista de TVs en todos los controladores
+        const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvDisconnected");
+          io.to(controller.id).emit(
+            "tvListUpdate",
+            clients.filter((c) => c.type === "tv")
+          );
+          io.to(controller.id).emit("tvDisconnected", disconnectedClient.id);
         });
       }
     }
