@@ -25,8 +25,8 @@ const io = new Server(httpServer, {
 interface Client {
   id: string;
   type: "controller" | "tv";
-  name?: string; // Identificador amigable para el TV
-  groupId?: string; // Para identificar grupos de TVs sincronizados
+  name?: string;
+  isHost?: boolean; // Nuevo campo para identificar el TV host
 }
 
 interface PlaybackState {
@@ -37,12 +37,27 @@ interface PlaybackState {
   currentTime: number;
   duration: number;
   timestamp: number;
-  tvId?: string; // ID del TV que envía el estado
+  tvId?: string;
+  bufferState?: number;
 }
 
 const clients: Client[] = [];
 let currentState: PlaybackState | null = null;
-let syncEnabled = false; // Estado global de sincronización
+let syncEnabled = false;
+let hostTvId: string | null = null; // Para trackear el TV host actual
+
+// Función para seleccionar un nuevo host
+const selectNewHost = () => {
+  const tvs = clients.filter(c => c.type === "tv");
+  if (tvs.length > 0) {
+    const newHost = tvs[0];
+    hostTvId = newHost.id;
+    newHost.isHost = true;
+    io.to(newHost.id).emit('becomeHost', true);
+    return newHost;
+  }
+  return null;
+};
 
 io.on("connection", (socket) => {
   socket.on("identify", (info) => {
@@ -168,17 +183,62 @@ io.on("connection", (socket) => {
       const disconnectedClient = clients[index];
       clients.splice(index, 1);
 
-      if (disconnectedClient.type === "tv") {
-        // Actualizar lista de TVs en todos los controladores
-        const controllers = clients.filter((c) => c.type === "controller");
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit(
-            "tvListUpdate",
-            clients.filter((c) => c.type === "tv")
-          );
-          io.to(controller.id).emit("tvDisconnected", disconnectedClient.id);
-        });
+      if (disconnectedClient.type === "controller") {
+        // Si se desconecta el controlador, seleccionar un TV como host
+        const newHost = selectNewHost();
+        if (newHost) {
+          io.emit('hostUpdate', { hostId: newHost.id });
+        }
+      } else if (disconnectedClient.type === "tv" && disconnectedClient.isHost) {
+        // Si se desconecta el TV host, seleccionar uno nuevo
+        const newHost = selectNewHost();
+        if (newHost) {
+          io.emit('hostUpdate', { hostId: newHost.id });
+        }
       }
+
+      // Actualizar lista de TVs
+      const controllers = clients.filter(c => c.type === "controller");
+      controllers.forEach(controller => {
+        io.to(controller.id).emit('tvListUpdate', clients.filter(c => c.type === "tv"));
+      });
+    }
+  });
+
+  // Nuevo handler para sincronización de estado
+  socket.on("syncState", (state: PlaybackState) => {
+    currentState = { ...state, timestamp: Date.now() };
+    
+    // Propagar el estado a todos los TVs excepto al emisor
+    const tvs = clients.filter(c => c.type === "tv" && c.id !== socket.id);
+    tvs.forEach(tv => {
+      io.to(tv.id).emit('syncState', currentState);
+    });
+
+    // Informar a los controladores
+    const controllers = clients.filter(c => c.type === "controller");
+    controllers.forEach(controller => {
+      io.to(controller.id).emit('currentState', currentState);
+    });
+  });
+
+  // Modificar el handler de command
+  socket.on("command", (command) => {
+    if (syncEnabled) {
+      command.synchronized = true;
+      command.timestamp = Date.now();
+      
+      // Enviar a todos los TVs
+      const tvs = clients.filter(c => c.type === "tv");
+      tvs.forEach(tv => {
+        io.to(tv.id).emit('command', command);
+      });
+    } else if (command.tvIds) {
+      // Modo individual
+      command.timestamp = Date.now();
+      command.tvIds.forEach((tvId: string) => {
+        io.to(tvId).emit('command', command);
+      });
     }
   });
 });
