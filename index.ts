@@ -101,8 +101,8 @@ io.on("connection", (socket) => {
       };
       clients.push(newClient);
 
-      // Solo enviar actualización de lista cuando se conecta/desconecta un TV
-      if (clientType === "tv") {
+      // Enviar lista de TVs cuando se conecta un TV o un controlador
+      if (clientType === "tv" || clientType === "controller") {
         const tvList = clients
           .filter((c) => c.type === "tv")
           .map((tv) => ({
@@ -112,10 +112,17 @@ io.on("connection", (socket) => {
             isHost: tv.isHost || false,
           }));
 
-        const controllers = clients.filter((c) => c.type === "controller");
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvListUpdate", tvList);
-        });
+        // Si es un TV, notificar a todos los controladores
+        if (clientType === "tv") {
+          const controllers = clients.filter((c) => c.type === "controller");
+          controllers.forEach((controller) => {
+            io.to(controller.id).emit("tvListUpdate", tvList);
+          });
+        }
+        // Si es un controlador, enviar la lista actual solo a este controlador
+        else if (clientType === "controller") {
+          io.to(socket.id).emit("tvListUpdate", tvList);
+        }
       }
     }
   });
@@ -215,7 +222,7 @@ io.on("connection", (socket) => {
     if (index !== -1) {
       const disconnectedClient = clients[index];
       clients.splice(index, 1);
-  
+
       // Solo notificar cambios en la lista de TVs si el cliente desconectado era un TV
       if (disconnectedClient.type === "tv") {
         const tvList = clients
@@ -226,13 +233,13 @@ io.on("connection", (socket) => {
             state: tv.state,
             isHost: tv.isHost || false,
           }));
-  
+
         const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
           io.to(controller.id).emit("tvListUpdate", tvList);
         });
       }
-  
+
       // Manejar cambio de host si es necesario
       if (disconnectedClient.type === "tv" && disconnectedClient.isHost) {
         const newHost = selectNewHost();
