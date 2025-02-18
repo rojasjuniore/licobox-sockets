@@ -290,6 +290,7 @@ io.on("connection", (socket) => {
 
   socket.on("command", (command) => {
     const now = Date.now();
+    console.log("Received command:", command); // Debug log
 
     // Obtener los TVs objetivo
     const targetTvIds =
@@ -297,10 +298,7 @@ io.on("connection", (socket) => {
       clients.filter((c) => c.type === "tv").map((tv) => tv.id);
 
     // Verificar buffer solo para comandos de reproducción
-    if (
-      (command.action === "play" || command.action === "pause") &&
-      command.tvIds?.length > 0
-    ) {
+    if (command.action === "play" && command.tvIds?.length > 0) {
       const targetTV = clients.find((c) => c.id === command.tvIds[0]);
       if (targetTV?.state?.isBuffering && targetTV?.state?.bufferLevel! < 0.1) {
         socket.emit("error", {
@@ -313,6 +311,7 @@ io.on("connection", (socket) => {
 
     // Enviar comando a los TVs
     targetTvIds.forEach((tvId: any) => {
+      console.log(`Sending ${command.action} command to TV ${tvId}`); // Debug log
       io.to(tvId).emit("command", {
         ...command,
         timestamp: now,
@@ -320,25 +319,26 @@ io.on("connection", (socket) => {
       });
     });
 
-    // Actualizar el estado actual para comandos relevantes
-    if (
-      command.action === "play" ||
-      command.action === "pause" ||
-      command.action === "changeSong" ||
-      command.action === "updatePlaylist" ||
-      command.action === "forceSync"
-    ) {
+    // Actualizar el estado actual
+    if (command.action === "play" || command.action === "pause") {
+      const isPlaying = command.action === "play";
       currentState = {
         ...currentState,
-        ...command,
+        isPlaying,
         timestamp: now,
-        isPlaying:
-          command.action === "play"
-            ? true
-            : command.action === "pause"
-            ? false
-            : currentState?.isPlaying,
       } as PlaybackState;
+
+      // Actualizar el estado del cliente
+      targetTvIds.forEach((tvId: string) => {
+        const client = clients.find((c) => c.id === tvId);
+        if (client) {
+          client.state = {
+            ...client.state,
+            isPlaying,
+            timestamp: now,
+          };
+        }
+      });
     }
 
     // Actualizar otros controladores
