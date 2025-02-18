@@ -209,38 +209,37 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Modificar el manejador de desconexión
+  // Optimizar el manejo de desconexión
   socket.on("disconnect", () => {
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
       clients.splice(index, 1);
-
-      if (disconnectedClient.type === "controller") {
-        // Si se desconecta el controlador, seleccionar un TV como host
-        const newHost = selectNewHost();
-        if (newHost) {
-          io.emit("hostUpdate", { hostId: newHost.id });
-        }
-      } else if (
-        disconnectedClient.type === "tv" &&
-        disconnectedClient.isHost
-      ) {
-        // Si se desconecta el TV host, seleccionar uno nuevo
+  
+      // Solo notificar cambios en la lista de TVs si el cliente desconectado era un TV
+      if (disconnectedClient.type === "tv") {
+        const tvList = clients
+          .filter((c) => c.type === "tv")
+          .map((tv) => ({
+            id: tv.id,
+            name: tv.name,
+            state: tv.state,
+            isHost: tv.isHost || false,
+          }));
+  
+        const controllers = clients.filter((c) => c.type === "controller");
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit("tvListUpdate", tvList);
+        });
+      }
+  
+      // Manejar cambio de host si es necesario
+      if (disconnectedClient.type === "tv" && disconnectedClient.isHost) {
         const newHost = selectNewHost();
         if (newHost) {
           io.emit("hostUpdate", { hostId: newHost.id });
         }
       }
-
-      // Actualizar lista de TVs
-      const controllers = clients.filter((c) => c.type === "controller");
-      controllers.forEach((controller) => {
-        io.to(controller.id).emit(
-          "tvListUpdate",
-          clients.filter((c) => c.type === "tv")
-        );
-      });
     }
   });
 
