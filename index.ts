@@ -139,47 +139,44 @@ io.on("connection", (socket) => {
   });
 
   // Modificar el evento disconnect
+  // Modificar el manejo de desconexión y reconexión
   socket.on("disconnect", () => {
     clearInterval(heartbeatInterval);
-
+  
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
-
-      // Remover inmediatamente el cliente
+      const clientState = { ...disconnectedClient.state }; // Guardar estado antes de remover
+      
+      // Remover cliente
       clients.splice(index, 1);
-
+  
       if (disconnectedClient.type === "tv") {
-        // Notificar a todos los controladores
+        // Guardar el estado actual antes de la desconexión
+        if (currentState && disconnectedClient.id === currentState.tvId) {
+          const savedState = {
+            ...currentState,
+            lastKnownState: clientState,
+            disconnectedAt: Date.now()
+          };
+          
+          // Mantener el estado por un tiempo limitado para reconexión
+          setTimeout(() => {
+            const reconnected = clients.some(c => c.id === disconnectedClient.id);
+            if (!reconnected) {
+              currentState = null;
+            }
+          }, 30000); // 30 segundos de gracia
+        }
+  
+        // Notificar a controladores
         const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
           io.to(controller.id).emit("tvDisconnected", {
             tvId: disconnectedClient.id,
+            state: clientState
           });
         });
-
-        // Actualizar lista de TVs
-        const tvList = clients
-          .filter((c) => c.type === "tv")
-          .map((tv) => ({
-            id: tv.id,
-            name: tv.name,
-            state: tv.state,
-            isHost: tv.isHost || false,
-          }));
-
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvListUpdate", tvList);
-        });
-
-        // Si el host se desconecta, seleccionar uno nuevo
-        if (disconnectedClient.id === hostTvId) {
-          hostTvId = null;
-          const newHost = selectNewHost();
-          if (newHost) {
-            io.emit("hostUpdate", { hostId: newHost.id });
-          }
-        }
       }
     }
   });
