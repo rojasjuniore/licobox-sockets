@@ -207,7 +207,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Modificar el evento identify
+  // En el manejador de 'identify'
   socket.on("identify", (info) => {
     const clientType = info.type;
     const clientName =
@@ -243,10 +243,13 @@ io.on("connection", (socket) => {
 
       // Si es un TV, notificar a todos los controladores
       if (clientType === "tv") {
-        const controllers = clients.filter((c) => c.type === "controller");
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvListUpdate", tvList);
-        });
+        // Encontrar un TV existente para obtener el estado actual
+        const existingTV = clients.find(
+          (c) => c.type === "tv" && c.id !== socket.id
+        );
+        if (existingTV) {
+          io.to(existingTV.id).emit("requestFullState");
+        }
       }
 
       // Si es un TV y no hay host, seleccionarlo como host
@@ -274,8 +277,6 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Eliminar el segundo manejador de command y unificar la lógica
-  // Modificar el handler de command
   socket.on("command", (command) => {
     if (command.action === "play" || command.action === "pause") {
       const targetTV = clients.find((c) => c.id === command.tvIds[0]);
@@ -520,6 +521,27 @@ io.on("connection", (socket) => {
         song: data.song,
         playedSongs: data.playedSongs,
       });
+    });
+  });
+
+  socket.on("fullStateUpdate", (state) => {
+    // Actualizar el estado del TV en la lista de clientes
+    const tvIndex = clients.findIndex((c) => c.id === state.tvId);
+    if (tvIndex !== -1) {
+      clients[tvIndex].state = state.state;
+    }
+
+    // Notificar a los controladores
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("tvStateUpdate", state);
+    });
+  });
+
+  socket.on("syncConfirm", (data) => {
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("tvSyncConfirmed", data);
     });
   });
 
