@@ -20,8 +20,12 @@ interface Client {
     lastBufferUpdate?: number;
     lastError?: any;
     lastErrorTimestamp?: number;
+    lastHeartbeat?: any;
     bufferLevel?: number;
     isBuffering?: boolean;
+    connectionStatus?: any;
+    lastDisconnect?: any;
+    lastReconnect?: any;
   };
 }
 
@@ -50,9 +54,6 @@ interface SyncState extends PlaybackState {
   networkLatency: number;
 }
 
-const INACTIVE_TIMEOUT = 60000; // 60 segundos
-const HEARTBEAT_INTERVAL = 25000; // 25 segundos
-const HEARTBEAT_TIMEOUT = 5000; // 5 segundos
 const RECONNECTION_GRACE_PERIOD = 30000; // 30 segundos
 
 const app = express();
@@ -176,8 +177,13 @@ const handleSyncState = (socket: any, state: PlaybackState) => {
 
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
-  let heartbeatTimeout: NodeJS.Timeout;
+  let heartbeatTimeout!: NodeJS.Timeout;
   let heartbeatInterval: NodeJS.Timeout;
+
+  // Ajustar las constantes de tiempo
+  const INACTIVE_TIMEOUT = 120000; // Aumentar a 120 segundos
+  const HEARTBEAT_INTERVAL = 15000; // Reducir a 15 segundos
+  const HEARTBEAT_TIMEOUT = 10000; // Aumentar a 10 segundos
 
   const setupHeartbeat = () => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -188,43 +194,61 @@ io.on("connection", (socket) => {
 
       // Verificar si el cliente sigue activo
       if (now - lastHeartbeat > INACTIVE_TIMEOUT) {
-        console.warn(`Client ${socket.id} inactive, disconnecting...`);
-        //ocket.disconnect(true);
+        console.warn(
+          `Client ${socket.id} possible inactivity, checking connection...`
+        );
+
+        // Enviar ping de verificación antes de desconectar
+        socket.emit("ping", {
+          timestamp: now,
+          checkConnection: true,
+        });
+
+        // Esperar respuesta antes de desconectar
+        setTimeout(() => {
+          const client = clients.find((c) => c.id === socket.id);
+          if (client && now - client.state?.lastHeartbeat! > INACTIVE_TIMEOUT) {
+            console.warn(
+              `Client ${socket.id} confirmed inactive, disconnecting...`
+            );
+            socket.disconnect(true);
+          }
+        }, HEARTBEAT_TIMEOUT);
+
         return;
       }
 
       socket.emit("ping", { timestamp: now });
-
-      heartbeatTimeout = setTimeout(() => {
-        const timeSinceLastHeartbeat = Date.now() - lastHeartbeat;
-        if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT) {
-          console.warn(
-            `Client ${socket.id} heartbeat timeout (${timeSinceLastHeartbeat}ms), reconnecting...`
-          );
-          //socket.disconnect(true);
-        }
-      }, HEARTBEAT_TIMEOUT);
     }, HEARTBEAT_INTERVAL);
   };
 
   socket.on("heartbeat", (data) => {
-    lastHeartbeat = Date.now();
+    const now = Date.now();
+    lastHeartbeat = now;
+
     const client = clients.find((c) => c.id === socket.id);
     if (client) {
+      // Actualizar estado con más información
       client.state = {
         ...client.state,
         ...data.state,
-        timestamp: Date.now(),
-        lastHeartbeat: Date.now(),
+        timestamp: now,
+        lastHeartbeat: now,
+        connectionStatus: "active",
+        lastActivity: now,
       };
-    }
 
-    // Responder inmediatamente con un pong
-    socket.emit("pong", { timestamp: Date.now() });
+      // Responder con información adicional
+      socket.emit("pong", {
+        timestamp: now,
+        serverTime: now,
+        latency: now - data.timestamp,
+        clientId: socket.id,
+      });
+    }
   });
 
-  setupHeartbeat();
-
+  // Modificar el manejo de desconexión
   socket.on("disconnect", (reason) => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
     if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
@@ -234,19 +258,55 @@ io.on("connection", (socket) => {
       const disconnectedClient = clients[index];
       const clientState = { ...disconnectedClient.state };
 
-      // No remover inmediatamente si es una desconexión temporal
+      // Mejorar el manejo de desconexiones temporales
       if (reason === "transport close" || reason === "ping timeout") {
+        console.log(
+          `Client ${socket.id} temporary disconnect, reason: ${reason}`
+        );
+
+        // Marcar cliente como reconectando pero no remover
+        disconnectedClient.state = {
+          ...disconnectedClient.state,
+          connectionStatus: "reconnecting",
+          lastDisconnect: Date.now(),
+        };
+
         setTimeout(() => {
-          const stillDisconnected = !clients.some((c) => c.id === socket.id);
-          if (stillDisconnected) {
-            clients.splice(index, 1);
+          const client = clients.find((c) => c.id === socket.id);
+          if (client?.state?.connectionStatus === "reconnecting") {
+            console.log(`Client ${socket.id} failed to reconnect, removing...`);
+            clients.splice(clients.indexOf(client), 1);
             handleClientRemoval(disconnectedClient, clientState);
           }
         }, RECONNECTION_GRACE_PERIOD);
       } else {
+        // Desconexión inmediata para otros casos
+        console.log(
+          `Client ${socket.id} permanent disconnect, reason: ${reason}`
+        );
         clients.splice(index, 1);
         handleClientRemoval(disconnectedClient, clientState);
       }
+    }
+  });
+
+  // Agregar manejador de reconexión
+  socket.on("reconnect", (attemptNumber) => {
+    console.log(
+      `Client ${socket.id} reconnected after ${attemptNumber} attempts`
+    );
+
+    const client = clients.find((c) => c.id === socket.id);
+    if (client) {
+      client.state = {
+        ...client.state,
+        connectionStatus: "active",
+        lastReconnect: Date.now(),
+      };
+
+      // Reiniciar heartbeat
+      lastHeartbeat = Date.now();
+      setupHeartbeat();
     }
   });
 
