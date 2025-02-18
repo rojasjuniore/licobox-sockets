@@ -62,8 +62,13 @@ const io = new Server(httpServer, {
     ],
     methods: ["GET", "POST"],
     credentials: true,
-    allowedHeaders: [],
+    allowedHeaders: ["*"],
   },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  connectTimeout: 45000,
 });
 
 const clients: Client[] = [];
@@ -71,26 +76,6 @@ let currentState: PlaybackState | null = null;
 let syncEnabled = false;
 let hostTvId: string | null = null; // Para trackear el TV host actual
 
-// Función para seleccionar un nuevo host
-const selectNewHost = () => {
-  const tvs = clients.filter((c) => c.type === "tv");
-  if (tvs.length > 0) {
-    const newHost = tvs[0];
-    hostTvId = newHost.id;
-    newHost.isHost = true;
-    io.to(newHost.id).emit("becomeHost", true);
-    return newHost;
-  }
-  return null;
-};
-
-const safeEmit = (socket: any, event: string, data: any) => {
-  try {
-    socket.emit(event, data);
-  } catch (error) {
-    console.error(`Error emitting ${event}:`, error);
-  }
-};
 
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
