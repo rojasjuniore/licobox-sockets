@@ -16,7 +16,7 @@ interface Client {
     playlist?: any[];
     currentSong?: number;
     timestamp?: number; // Add this line
-    lastStateReceived: number;
+    lastStateReceived?: number;
   };
 }
 
@@ -91,6 +91,18 @@ io.on("connection", (socket) => {
 
   socket.on("pong", () => {
     lastHeartbeat = Date.now();
+  });
+
+  socket.on("heartbeat", (data) => {
+    lastHeartbeat = Date.now();
+    const client = clients.find((c) => c.id === socket.id);
+    if (client) {
+      client.state = {
+        ...client.state,
+        ...data.state,
+        timestamp: Date.now(),
+      };
+    }
   });
 
   socket.on("disconnect", () => {
@@ -270,38 +282,6 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("disconnect", () => {
-    const index = clients.findIndex((c) => c.id === socket.id);
-    if (index !== -1) {
-      const disconnectedClient = clients[index];
-      clients.splice(index, 1);
-
-      if (disconnectedClient.type === "tv") {
-        // Notify controllers about TV disconnection
-        const controllers = clients.filter((c) => c.type === "controller");
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvDisconnected", {
-            tvId: disconnectedClient.id,
-          });
-        });
-
-        // Update TV list for all controllers
-        const tvList = clients
-          .filter((c) => c.type === "tv")
-          .map((tv) => ({
-            id: tv.id,
-            name: tv.name,
-            state: tv.state,
-            isHost: tv.isHost || false,
-          }));
-
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvListUpdate", tvList);
-        });
-      }
-    }
-  });
-
   // Nuevo handler para sincronización de estado
   socket.on("syncState", (state: PlaybackState) => {
     currentState = { ...state, timestamp: Date.now() };
@@ -446,6 +426,20 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("reconnect_attempt", (attemptNumber) => {
+    console.log(
+      `Client ${socket.id} attempting to reconnect (attempt ${attemptNumber})`
+    );
+    const client = clients.find((c) => c.id === socket.id);
+    if (client?.type === "tv" && currentState) {
+      socket.emit("syncState", {
+        ...currentState,
+        timestamp: Date.now(),
+        forceSync: true,
+      });
+    }
+  });
+
   // Mejorar el manejo de errores
   socket.on("error", (error) => {
     console.error("Socket error:", error);
@@ -462,5 +456,23 @@ httpServer.listen(PORT, () => {
 setInterval(() => {
   clients.forEach((client) => {
     io.to(client.id).emit("ping");
+  });
+}, 30000);
+
+setInterval(() => {
+  const now = Date.now();
+  const inactiveTimeout = 60000; // 1 minuto
+
+  clients.forEach((client) => {
+    if (
+      client.state?.timestamp &&
+      now - client.state.timestamp > inactiveTimeout
+    ) {
+      const socket = io.sockets.sockets.get(client.id);
+      if (socket) {
+        console.log(`Disconnecting inactive client ${client.id}`);
+        socket.disconnect(true);
+      }
+    }
   });
 }, 30000);
