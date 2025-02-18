@@ -290,11 +290,10 @@ io.on("connection", (socket) => {
 
   socket.on("command", (command) => {
     const now = Date.now();
-    console.log("Received command:", command); // Debug log
+    console.log("Received command:", command);
 
     // Obtener los TVs objetivo
-    const targetTvIds =
-      command.tvIds ||
+    const targetTvIds = command.tvIds ||
       clients.filter((c) => c.type === "tv").map((tv) => tv.id);
 
     // Verificar buffer solo para comandos de reproducción
@@ -311,7 +310,7 @@ io.on("connection", (socket) => {
 
     // Enviar comando a los TVs
     targetTvIds.forEach((tvId: any) => {
-      console.log(`Sending ${command.action} command to TV ${tvId}`); // Debug log
+      console.log(`Sending ${command.action} command to TV ${tvId}`);
       io.to(tvId).emit("command", {
         ...command,
         timestamp: now,
@@ -319,16 +318,18 @@ io.on("connection", (socket) => {
       });
     });
 
-    // Actualizar el estado actual
+    // Actualizar el estado actual y notificar a todos los controladores
     if (command.action === "play" || command.action === "pause") {
       const isPlaying = command.action === "play";
+      
+      // Actualizar estado global
       currentState = {
         ...currentState,
         isPlaying,
         timestamp: now,
       } as PlaybackState;
 
-      // Actualizar el estado del cliente
+      // Actualizar estado de los TVs afectados
       targetTvIds.forEach((tvId: string) => {
         const client = clients.find((c) => c.id === tvId);
         if (client) {
@@ -339,19 +340,19 @@ io.on("connection", (socket) => {
           };
         }
       });
-    }
 
-    // Actualizar otros controladores
-    const otherControllers = clients.filter(
-      (c) => c.type === "controller" && c.id !== socket.id
-    );
-
-    otherControllers.forEach((controller) => {
-      io.to(controller.id).emit("currentState", {
-        ...currentState,
-        tvIds: targetTvIds,
+      // Notificar a TODOS los controladores, incluyendo el que envió el comando
+      const allControllers = clients.filter((c) => c.type === "controller");
+      allControllers.forEach((controller) => {
+        io.to(controller.id).emit("currentState", {
+          ...currentState,
+          tvIds: targetTvIds,
+          isPlaying, // Asegurar que este campo se envía
+          action: command.action, // Agregar el tipo de acción
+          timestamp: now,
+        });
       });
-    });
+    }
   });
 
   // Nuevo handler para sincronización de estado
