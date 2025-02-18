@@ -340,28 +340,32 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Modificar el handler de tvStateUpdate para evitar actualizaciones innecesarias
+  // Modificar el handler de tvStateUpdate
   socket.on("tvStateUpdate", (state) => {
-    const tvClient = clients.find((c) => c.id === state.tvId || socket.id);
+    const tvClient = clients.find(c => c.id === state.tvId || socket.id);
     if (tvClient) {
-      // Solo actualizar los campos que han cambiado
       tvClient.state = {
         ...tvClient.state,
         ...state.state,
         timestamp: Date.now(),
       };
+
+      // Actualizar el estado global si es necesario
+      if (tvClient.isHost) {
+        currentState = {
+          ...currentState,
+          ...state.state,
+          timestamp: Date.now(),
+        };
+      }
     }
 
-    // Enviar actualización optimizada a los controladores
-    const controllers = clients.filter((c) => c.type === "controller");
-    controllers.forEach((controller) => {
+    // Enviar actualización a los controladores
+    const controllers = clients.filter(c => c.type === "controller");
+    controllers.forEach(controller => {
       safeEmit(io.to(controller.id), "tvStateUpdate", {
         tvId: state.tvId || socket.id,
-        state: {
-          currentTime: state.state.currentTime,
-          duration: state.state.duration,
-          isPlaying: state.state.isPlaying,
-        },
+        state: state.state,
         timestamp: Date.now(),
       });
     });
