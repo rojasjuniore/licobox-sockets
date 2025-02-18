@@ -18,6 +18,8 @@ interface Client {
     timestamp?: number; // Add this line
     lastStateReceived?: number;
     lastBufferUpdate?: number;
+    lastError?: any;
+    lastErrorTimestamp?: number;
     bufferLevel?: number;
     isBuffering?: boolean;
   };
@@ -41,8 +43,10 @@ interface SyncState extends PlaybackState {
   networkLatency: number;
 }
 
-const HEARTBEAT_INTERVAL = 30000;
-const HEARTBEAT_TIMEOUT = 5000;
+const INACTIVE_TIMEOUT = 60000; // 60 segundos
+const HEARTBEAT_INTERVAL = 25000; // 25 segundos
+const HEARTBEAT_TIMEOUT = 5000; // 5 segundos
+const RECONNECTION_GRACE_PERIOD = 30000; // 30 segundos
 
 const app = express();
 app.use(cors());
@@ -57,6 +61,9 @@ const io = new Server(httpServer, {
   pingInterval: 25000,
   connectTimeout: 30000,
   transports: ["websocket", "polling"],
+  allowUpgrades: true,
+  upgradeTimeout: 10000,
+  maxHttpBufferSize: 1e8,
 });
 
 const clients: Client[] = [];
@@ -67,20 +74,27 @@ let hostTvId: string | null = null; // Para trackear el TV host actual
 // Agregar al inicio después de las constantes
 const handleError = (socket: any, error: any) => {
   console.error(`Error for client ${socket.id}:`, error);
-
   const client = clients.find((c) => c.id === socket.id);
+
   if (client) {
-    // Notificar al cliente del error
+    const timestamp = Date.now();
+    client.state = {
+      ...client.state,
+      lastError: error,
+      lastErrorTimestamp: timestamp,
+    };
+
     socket.emit("error", {
       message: "An error occurred",
-      timestamp: Date.now(),
+      timestamp,
+      reconnect: true,
     });
 
-    // Si es un TV, intentar resincronizar
+    // Intentar resincronizar si es un TV
     if (client.type === "tv" && currentState) {
       socket.emit("syncState", {
         ...currentState,
-        timestamp: Date.now(),
+        timestamp,
         forceSync: true,
       });
     }
@@ -102,6 +116,30 @@ const selectNewHost = () => {
   return null;
 };
 
+const handleClientRemoval = (client: Client, state: any) => {
+  if (client.type === "tv") {
+    if (currentState && client.id === currentState.tvId) {
+      setTimeout(() => {
+        const reconnected = clients.some((c) => c.id === client.id);
+        if (!reconnected) {
+          currentState = null;
+          selectNewHost();
+        }
+      }, RECONNECTION_GRACE_PERIOD);
+    }
+
+    // Notificar a controladores
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
+      io.to(controller.id).emit("tvDisconnected", {
+        tvId: client.id,
+        state,
+        timestamp: Date.now(),
+      });
+    });
+  }
+};
+
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
   let heartbeatTimeout: NodeJS.Timeout;
@@ -112,12 +150,17 @@ io.on("connection", (socket) => {
     if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
 
     heartbeatInterval = setInterval(() => {
-      socket.emit("ping");
+      const timestamp = Date.now();
+      socket.emit("ping", { timestamp });
 
       heartbeatTimeout = setTimeout(() => {
-        if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
+        const client = clients.find((c) => c.id === socket.id);
+        if (
+          client &&
+          Date.now() - (client.state?.timestamp || 0) > HEARTBEAT_TIMEOUT
+        ) {
           console.warn(
-            `Client ${socket.id} heartbeat timeout, reconnecting...`
+            `Client ${socket.id} heartbeat timeout, attempting reconnection...`
           );
           socket.disconnect(true);
         }
@@ -143,46 +186,27 @@ io.on("connection", (socket) => {
 
   setupHeartbeat();
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
     if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
 
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
-      const clientState = { ...disconnectedClient.state }; // Guardar estado antes de remover
+      const clientState = { ...disconnectedClient.state };
 
-      // Remover cliente
-      clients.splice(index, 1);
-
-      if (disconnectedClient.type === "tv") {
-        // Guardar el estado actual antes de la desconexión
-        if (currentState && disconnectedClient.id === currentState.tvId) {
-          const savedState = {
-            ...currentState,
-            lastKnownState: clientState,
-            disconnectedAt: Date.now(),
-          };
-
-          // Mantener el estado por un tiempo limitado para reconexión
-          setTimeout(() => {
-            const reconnected = clients.some(
-              (c) => c.id === disconnectedClient.id
-            );
-            if (!reconnected) {
-              currentState = null;
-            }
-          }, 30000); // 30 segundos de gracia
-        }
-
-        // Notificar a controladores
-        const controllers = clients.filter((c) => c.type === "controller");
-        controllers.forEach((controller) => {
-          io.to(controller.id).emit("tvDisconnected", {
-            tvId: disconnectedClient.id,
-            state: clientState,
-          });
-        });
+      // No remover inmediatamente si es una desconexión temporal
+      if (reason === "transport close" || reason === "ping timeout") {
+        setTimeout(() => {
+          const stillDisconnected = !clients.some((c) => c.id === socket.id);
+          if (stillDisconnected) {
+            clients.splice(index, 1);
+            handleClientRemoval(disconnectedClient, clientState);
+          }
+        }, RECONNECTION_GRACE_PERIOD);
+      } else {
+        clients.splice(index, 1);
+        handleClientRemoval(disconnectedClient, clientState);
       }
     }
   });
