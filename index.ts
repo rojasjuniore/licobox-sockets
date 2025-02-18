@@ -77,6 +77,44 @@ let currentState: PlaybackState | null = null;
 let syncEnabled = false;
 let hostTvId: string | null = null; // Para trackear el TV host actual
 
+// Agregar al inicio después de las constantes
+const handleError = (socket: any, error: any) => {
+  console.error(`Error for client ${socket.id}:`, error);
+
+  const client = clients.find((c) => c.id === socket.id);
+  if (client) {
+    // Notificar al cliente del error
+    socket.emit("error", {
+      message: "An error occurred",
+      timestamp: Date.now(),
+    });
+
+    // Si es un TV, intentar resincronizar
+    if (client.type === "tv" && currentState) {
+      socket.emit("syncState", {
+        ...currentState,
+        timestamp: Date.now(),
+        forceSync: true,
+      });
+    }
+  }
+};
+
+// Agregar al inicio del archivo después de las interfaces
+const selectNewHost = () => {
+  const tvs = clients.filter((c) => c.type === "tv");
+  if (tvs.length > 0) {
+    const newHost = tvs[0];
+    hostTvId = newHost.id;
+    newHost.isHost = true;
+
+    // Notificar a todos los clientes
+    io.emit("hostUpdate", { hostId: newHost.id });
+    return newHost;
+  }
+  return null;
+};
+
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
 
@@ -145,7 +183,16 @@ io.on("connection", (socket) => {
             });
           }
         }
-      }, 1000); // Esperar 1 segundo para ver si es una reconexión rápida
+      }, 1000);
+
+      // Si el host se desconecta, seleccionar uno nuevo
+      if (disconnectedClient?.id === hostTvId) {
+        hostTvId = null;
+        const newHost = selectNewHost();
+        if (newHost) {
+          io.emit("hostUpdate", { hostId: newHost.id });
+        }
+      }
     }
   });
   // Modificar el evento identify
@@ -185,6 +232,15 @@ io.on("connection", (socket) => {
             io.to(controller.id).emit("tvListUpdate", tvList);
           });
         }
+
+        // Si es un TV y no hay host, seleccionarlo como host
+        if (clientType === "tv" && !hostTvId) {
+          const newClient = clients[clients.length - 1];
+          hostTvId = newClient.id;
+          newClient.isHost = true;
+          io.emit("hostUpdate", { hostId: newClient.id });
+        }
+
         // Si es un controlador, enviar la lista actual solo a este controlador
         else if (clientType === "controller") {
           io.to(socket.id).emit("tvListUpdate", tvList);
@@ -375,23 +431,37 @@ io.on("connection", (socket) => {
     const client = clients.find((c) => c.id === state.tvId);
     if (client) {
       const timestamp = Date.now();
+      const stateTimestamp = state.state?.timestamp || timestamp;
 
-      // Verificar si el estado es más reciente que el último recibido
-      if (!client.state?.timestamp || timestamp > client.state.timestamp) {
+      // Solo actualizar si el estado es más reciente o viene del host
+      if (
+        client.isHost ||
+        !client.state?.timestamp ||
+        stateTimestamp > client.state.timestamp
+      ) {
         client.state = {
           ...client.state,
           ...state.state,
-          timestamp,
+          timestamp: stateTimestamp,
         };
 
-        // Actualizar el estado global si es el host
+        // Si es el host, actualizar el estado global
         if (client.isHost) {
           currentState = {
             ...currentState,
             ...state.state,
-            timestamp,
+            timestamp: stateTimestamp,
             tvId: state.tvId,
+            stateSequence: (currentState?.stateSequence || 0) + 1,
           } as PlaybackState;
+
+          // Propagar el estado a otros TVs para mantener sincronización
+          const otherTvs = clients.filter(
+            (c) => c.type === "tv" && c.id !== state.tvId
+          );
+          otherTvs.forEach((tv) => {
+            io.to(tv.id).emit("syncState", currentState);
+          });
         }
 
         // Notificar a los controladores
@@ -399,8 +469,9 @@ io.on("connection", (socket) => {
         controllers.forEach((controller) => {
           io.to(controller.id).emit("currentState", {
             ...state,
-            timestamp,
+            timestamp: stateTimestamp,
             isHost: client.isHost,
+            stateSequence: currentState?.stateSequence,
           });
         });
       }
@@ -456,10 +527,11 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Mejorar el manejo de errores
-  socket.on("error", (error) => {
-    console.error("Socket error:", error);
-    // Notificar a los clientes afectados
+  socket.on("error", (error) => handleError(socket, error));
+
+  socket.on("connect_error", (error) => {
+    console.error(`Connection error for ${socket.id}:`, error);
+    handleError(socket, error);
   });
 });
 
