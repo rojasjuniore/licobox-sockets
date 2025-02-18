@@ -17,14 +17,9 @@ interface Client {
     currentSong?: number;
     timestamp?: number; // Add this line
     lastStateReceived?: number;
+    bufferLevel?: number;
+    isBuffering?: boolean;
   };
-}
-
-interface PlayedSong {
-  id: string;
-  title: string;
-  artist: string;
-  timestamp: number;
 }
 
 interface PlaybackState {
@@ -146,14 +141,14 @@ io.on("connection", (socket) => {
   // Modificar el evento disconnect
   socket.on("disconnect", () => {
     clearInterval(heartbeatInterval);
-  
+
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
-      
+
       // Remover inmediatamente el cliente
       clients.splice(index, 1);
-  
+
       if (disconnectedClient.type === "tv") {
         // Notificar a todos los controladores
         const controllers = clients.filter((c) => c.type === "controller");
@@ -162,7 +157,7 @@ io.on("connection", (socket) => {
             tvId: disconnectedClient.id,
           });
         });
-  
+
         // Actualizar lista de TVs
         const tvList = clients
           .filter((c) => c.type === "tv")
@@ -172,11 +167,11 @@ io.on("connection", (socket) => {
             state: tv.state,
             isHost: tv.isHost || false,
           }));
-  
+
         controllers.forEach((controller) => {
           io.to(controller.id).emit("tvListUpdate", tvList);
         });
-  
+
         // Si el host se desconecta, seleccionar uno nuevo
         if (disconnectedClient.id === hostTvId) {
           hostTvId = null;
@@ -188,17 +183,42 @@ io.on("connection", (socket) => {
       }
     }
   });
+
+  socket.on("bufferState", (data: any) => {
+    const client = clients.find((c) => c.id === data.tvId);
+    if (client) {
+      client.state = {
+        ...client.state,
+        isBuffering: data.isBuffering,
+        bufferLevel: data.bufferLevel,
+        timestamp: data.timestamp,
+      };
+
+      // Notificar a los controladores
+      const controllers = clients.filter((c) => c.type === "controller");
+      controllers.forEach((controller) => {
+        io.to(controller.id).emit("bufferUpdate", {
+          tvId: data.tvId,
+          isBuffering: data.isBuffering,
+          bufferLevel: data.bufferLevel,
+          timestamp: data.timestamp,
+        });
+      });
+    }
+  });
+
   // Modificar el evento identify
   socket.on("identify", (info) => {
     const clientType = info.type;
-    const clientName = info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
-  
+    const clientName =
+      info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
+
     // Remover cualquier cliente existente con el mismo ID
     const existingIndex = clients.findIndex((c) => c.id === socket.id);
     if (existingIndex !== -1) {
       clients.splice(existingIndex, 1);
     }
-  
+
     const newClient: Client = {
       id: socket.id,
       type: clientType,
@@ -209,7 +229,7 @@ io.on("connection", (socket) => {
       },
     };
     clients.push(newClient);
-  
+
     // Enviar lista de TVs cuando se conecta un TV o un controlador
     if (clientType === "tv" || clientType === "controller") {
       const tvList = clients
@@ -220,7 +240,7 @@ io.on("connection", (socket) => {
           state: tv.state,
           isHost: tv.isHost || false,
         }));
-  
+
       // Si es un TV, notificar a todos los controladores
       if (clientType === "tv") {
         const controllers = clients.filter((c) => c.type === "controller");
@@ -228,7 +248,7 @@ io.on("connection", (socket) => {
           io.to(controller.id).emit("tvListUpdate", tvList);
         });
       }
-  
+
       // Si es un TV y no hay host, seleccionarlo como host
       if (clientType === "tv" && !hostTvId) {
         const newClient = clients[clients.length - 1];
@@ -236,7 +256,7 @@ io.on("connection", (socket) => {
         newClient.isHost = true;
         io.emit("hostUpdate", { hostId: newClient.id });
       }
-  
+
       // Si es un controlador, enviar la lista actual solo a este controlador
       else if (clientType === "controller") {
         io.to(socket.id).emit("tvListUpdate", tvList);
@@ -258,27 +278,35 @@ io.on("connection", (socket) => {
   // Modificar el handler de command
   socket.on("command", (command) => {
     if (command.action === "play" || command.action === "pause") {
+      const targetTV = clients.find((c) => c.id === command.tvIds[0]);
+
+      // No permitir play si está en buffer
+      if (command.action === "play" && targetTV?.state?.isBuffering) {
+        return;
+      }
+
       if (currentState) {
         currentState.isPlaying = command.action === "play";
         currentState.timestamp = Date.now();
       }
-  
+
       // Asegurarse de que el comando llegue a todos los TVs afectados
-      const targetTvIds = command.tvIds || 
+      const targetTvIds =
+        command.tvIds ||
         clients.filter((c) => c.type === "tv").map((tv) => tv.id);
-  
+
       const playbackState = {
         isPlaying: command.action === "play",
         timestamp: Date.now(),
         forceUpdate: true, // Forzar actualización
-        sourceId: socket.id // Identificar la fuente del comando
+        sourceId: socket.id, // Identificar la fuente del comando
       };
-  
+
       // Emitir a TVs
       targetTvIds.forEach((tvId: string) => {
         io.to(tvId).emit("playbackUpdate", playbackState);
       });
-  
+
       // Notificar a todos los controladores
       const controllers = clients.filter((c) => c.type === "controller");
       controllers.forEach((controller) => {
@@ -436,9 +464,9 @@ io.on("connection", (socket) => {
           ...client.state,
           ...state.state,
           timestamp: stateTimestamp,
-          lastStateUpdate: timestamp
+          lastStateUpdate: timestamp,
         };
-  
+
         // Propagar el estado a los controladores
         const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
@@ -446,7 +474,7 @@ io.on("connection", (socket) => {
             ...state,
             timestamp: stateTimestamp,
             isHost: client.isHost,
-            stateSequence: currentState?.stateSequence
+            stateSequence: currentState?.stateSequence,
           });
         });
       }
