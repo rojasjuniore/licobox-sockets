@@ -54,7 +54,7 @@ interface SyncState extends PlaybackState {
   networkLatency: number;
 }
 
-const RECONNECTION_GRACE_PERIOD = 30000; // 30 segundos
+const RECONNECTION_GRACE_PERIOD = 60000; // 60 segundos
 
 const app = express();
 app.use(cors());
@@ -258,55 +258,98 @@ io.on("connection", (socket) => {
       const disconnectedClient = clients[index];
       const clientState = { ...disconnectedClient.state };
 
-      // Mejorar el manejo de desconexiones temporales
-      if (reason === "transport close" || reason === "ping timeout") {
-        console.log(
-          `Client ${socket.id} temporary disconnect, reason: ${reason}`
-        );
-
-        // Marcar cliente como reconectando pero no remover
+      // Solo manejar desconexión temporal para TVs
+      if (disconnectedClient.type === "tv" && 
+         (reason === "transport close" || reason === "ping timeout")) {
+        console.log(`TV Client ${socket.id} temporary disconnect, reason: ${reason}`);
+        
+        // No remover el cliente, solo marcar como reconectando
         disconnectedClient.state = {
           ...disconnectedClient.state,
           connectionStatus: "reconnecting",
           lastDisconnect: Date.now(),
         };
 
+        // Notificar a los controladores del estado de reconexión
+        const controllers = clients.filter((c) => c.type === "controller");
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit("tvStateUpdate", {
+            tvId: disconnectedClient.id,
+            state: disconnectedClient.state,
+            isReconnecting: true
+          });
+        });
+
         setTimeout(() => {
           const client = clients.find((c) => c.id === socket.id);
           if (client?.state?.connectionStatus === "reconnecting") {
-            console.log(`Client ${socket.id} failed to reconnect, removing...`);
+            console.log(`TV Client ${socket.id} failed to reconnect, removing...`);
             clients.splice(clients.indexOf(client), 1);
             handleClientRemoval(disconnectedClient, clientState);
           }
         }, RECONNECTION_GRACE_PERIOD);
       } else {
-        // Desconexión inmediata para otros casos
-        console.log(
-          `Client ${socket.id} permanent disconnect, reason: ${reason}`
-        );
+        // Desconexión inmediata para controladores o desconexiones permanentes
+        console.log(`Client ${socket.id} permanent disconnect, reason: ${reason}`);
         clients.splice(index, 1);
-        handleClientRemoval(disconnectedClient, clientState);
+        
+        if (disconnectedClient.type === "tv") {
+          handleClientRemoval(disconnectedClient, clientState);
+        }
       }
     }
   });
 
-  // Agregar manejador de reconexión
-  socket.on("reconnect", (attemptNumber) => {
-    console.log(
-      `Client ${socket.id} reconnected after ${attemptNumber} attempts`
+  // Mejorar el manejo de identify
+  socket.on("identify", (info) => {
+    const clientType = info.type;
+    const clientName = info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
+
+    // Buscar cliente existente
+    const existingClient = clients.find((c) => 
+      c.id === socket.id || 
+      (c.type === "tv" && c.name === clientName)
     );
 
-    const client = clients.find((c) => c.id === socket.id);
-    if (client) {
-      client.state = {
-        ...client.state,
+    if (existingClient) {
+      // Actualizar el cliente existente
+      existingClient.id = socket.id;
+      existingClient.state = {
+        ...existingClient.state,
+        ...info.state,
         connectionStatus: "active",
-        lastReconnect: Date.now(),
+        timestamp: Date.now(),
       };
+    } else {
+      // Crear nuevo cliente
+      clients.push({
+        id: socket.id,
+        type: clientType,
+        name: clientName,
+        state: {
+          ...info.state,
+          connectionStatus: "active",
+          timestamp: Date.now(),
+        },
+      });
+    }
 
-      // Reiniciar heartbeat
-      lastHeartbeat = Date.now();
-      setupHeartbeat();
+    // Actualizar lista de TVs
+    if (clientType === "tv" || clientType === "controller") {
+      const tvList = clients
+        .filter((c) => c.type === "tv")
+        .map((tv) => ({
+          id: tv.id,
+          name: tv.name,
+          state: tv.state,
+          isHost: tv.isHost || false,
+        }));
+
+      // Notificar a todos los controladores
+      const controllers = clients.filter((c) => c.type === "controller");
+      controllers.forEach((controller) => {
+        io.to(controller.id).emit("tvListUpdate", tvList);
+      });
     }
   });
 
