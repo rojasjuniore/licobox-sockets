@@ -3,25 +3,6 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 
-const app = express();
-app.use(cors());
-
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: [
-      "http://localhost:4200",
-      "http://localhost:3001",
-      "http://localhost:5173",
-      "https://licobox-sockets-production.up.railway.app",
-      "https://licobox-sockets-production.up.railway.app:6533",
-    ],
-    methods: ["GET", "POST"],
-    credentials: true,
-    allowedHeaders: [],
-  },
-});
-
 // Update the Client interface to include timestamp
 interface Client {
   id: string;
@@ -48,12 +29,35 @@ interface PlaybackState {
   timestamp: number;
   tvId?: string;
   bufferState?: number;
+  stateSequence: number;
 }
 
 interface SyncState extends PlaybackState {
   masterTimestamp: number;
   networkLatency: number;
 }
+
+const HEARTBEAT_INTERVAL = 30000;
+const HEARTBEAT_TIMEOUT = 5000;
+
+const app = express();
+app.use(cors());
+
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: [
+      "http://localhost:4200",
+      "http://localhost:3001",
+      "http://localhost:5173",
+      "https://licobox-sockets-production.up.railway.app",
+      "https://licobox-sockets-production.up.railway.app:6533",
+    ],
+    methods: ["GET", "POST"],
+    credentials: true,
+    allowedHeaders: [],
+  },
+});
 
 const clients: Client[] = [];
 let currentState: PlaybackState | null = null;
@@ -82,6 +86,24 @@ const safeEmit = (socket: any, event: string, data: any) => {
 };
 
 io.on("connection", (socket) => {
+  let lastHeartbeat = Date.now();
+
+  const heartbeatInterval = setInterval(() => {
+    if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
+      console.warn(`Client ${socket.id} heartbeat timeout`);
+      socket.disconnect(true);
+    } else {
+      socket.emit("ping");
+    }
+  }, HEARTBEAT_INTERVAL);
+
+  socket.on("pong", () => {
+    lastHeartbeat = Date.now();
+  });
+
+  socket.on("disconnect", () => {
+    clearInterval(heartbeatInterval);
+  });
   // Modificar el evento identify
   socket.on("identify", (info) => {
     const clientType = info.type;
@@ -269,24 +291,16 @@ io.on("connection", (socket) => {
 
   socket.on("masterSync", (state: SyncState) => {
     if (hostTvId === socket.id) {
-      const slaves = clients.filter(
-        (c) => c.type === "tv" && c.id !== hostTvId
-      );
+      const currentTimestamp = Date.now();
+      const networkLatency = (currentTimestamp - state.masterTimestamp) / 2;
+      
+      const slaves = clients.filter((c) => c.type === "tv" && c.id !== hostTvId);
       slaves.forEach((slave) => {
         io.to(slave.id).emit("slaveSyncUpdate", {
           ...state,
-          masterTimestamp: Date.now(),
-        });
-      });
-
-      // Informar a los controladores
-      const controllers = clients.filter((c) => c.type === "controller");
-      controllers.forEach((controller) => {
-        io.to(controller.id).emit("timeUpdate", {
-          tvId: socket.id,
-          currentTime: state.currentTime,
-          duration: state.duration,
-          isPlaying: state.isPlaying,
+          masterTimestamp: currentTimestamp,
+          networkLatency,
+          adjustedTime: state.currentTime + networkLatency/1000
         });
       });
     }
