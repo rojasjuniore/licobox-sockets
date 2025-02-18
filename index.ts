@@ -143,79 +143,27 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Modificar el evento disconnect
   socket.on("disconnect", () => {
     clearInterval(heartbeatInterval);
-
-    // Verificar si el cliente realmente existe antes de procesarlo
+  
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
-
-      // Esperar un breve momento para ver si es una reconexión rápida
-      setTimeout(() => {
-        // Verificar si el cliente aún está en la lista (podría haberse reconectado)
-        const stillDisconnected = !clients.some((c) => c.id === socket.id);
-
-        if (stillDisconnected) {
-          clients.splice(index, 1);
-
-          if (disconnectedClient.type === "tv") {
-            // Notify controllers about TV disconnection
-            const controllers = clients.filter((c) => c.type === "controller");
-            controllers.forEach((controller) => {
-              io.to(controller.id).emit("tvDisconnected", {
-                tvId: disconnectedClient.id,
-              });
-            });
-
-            // Update TV list for all controllers
-            const tvList = clients
-              .filter((c) => c.type === "tv")
-              .map((tv) => ({
-                id: tv.id,
-                name: tv.name,
-                state: tv.state,
-                isHost: tv.isHost || false,
-              }));
-
-            controllers.forEach((controller) => {
-              io.to(controller.id).emit("tvListUpdate", tvList);
-            });
-          }
-        }
-      }, 1000);
-
-      // Si el host se desconecta, seleccionar uno nuevo
-      if (disconnectedClient?.id === hostTvId) {
-        hostTvId = null;
-        const newHost = selectNewHost();
-        if (newHost) {
-          io.emit("hostUpdate", { hostId: newHost.id });
-        }
-      }
-    }
-  });
-  // Modificar el evento identify
-  socket.on("identify", (info) => {
-    const clientType = info.type;
-    const clientName =
-      info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
-
-    const existingClient = clients.find((c) => c.id === socket.id);
-    if (!existingClient) {
-      const newClient: Client = {
-        id: socket.id,
-        type: clientType,
-        name: clientName,
-        state: {
-          ...info.state,
-          timestamp: Date.now(),
-        },
-      };
-      clients.push(newClient);
-
-      // Enviar lista de TVs cuando se conecta un TV o un controlador
-      if (clientType === "tv" || clientType === "controller") {
+      
+      // Remover inmediatamente el cliente
+      clients.splice(index, 1);
+  
+      if (disconnectedClient.type === "tv") {
+        // Notificar a todos los controladores
+        const controllers = clients.filter((c) => c.type === "controller");
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit("tvDisconnected", {
+            tvId: disconnectedClient.id,
+          });
+        });
+  
+        // Actualizar lista de TVs
         const tvList = clients
           .filter((c) => c.type === "tv")
           .map((tv) => ({
@@ -224,27 +172,74 @@ io.on("connection", (socket) => {
             state: tv.state,
             isHost: tv.isHost || false,
           }));
-
-        // Si es un TV, notificar a todos los controladores
-        if (clientType === "tv") {
-          const controllers = clients.filter((c) => c.type === "controller");
-          controllers.forEach((controller) => {
-            io.to(controller.id).emit("tvListUpdate", tvList);
-          });
+  
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit("tvListUpdate", tvList);
+        });
+  
+        // Si el host se desconecta, seleccionar uno nuevo
+        if (disconnectedClient.id === hostTvId) {
+          hostTvId = null;
+          const newHost = selectNewHost();
+          if (newHost) {
+            io.emit("hostUpdate", { hostId: newHost.id });
+          }
         }
-
-        // Si es un TV y no hay host, seleccionarlo como host
-        if (clientType === "tv" && !hostTvId) {
-          const newClient = clients[clients.length - 1];
-          hostTvId = newClient.id;
-          newClient.isHost = true;
-          io.emit("hostUpdate", { hostId: newClient.id });
-        }
-
-        // Si es un controlador, enviar la lista actual solo a este controlador
-        else if (clientType === "controller") {
-          io.to(socket.id).emit("tvListUpdate", tvList);
-        }
+      }
+    }
+  });
+  // Modificar el evento identify
+  socket.on("identify", (info) => {
+    const clientType = info.type;
+    const clientName = info.name || `TV-${Math.random().toString(36).substr(2, 6)}`;
+  
+    // Remover cualquier cliente existente con el mismo ID
+    const existingIndex = clients.findIndex((c) => c.id === socket.id);
+    if (existingIndex !== -1) {
+      clients.splice(existingIndex, 1);
+    }
+  
+    const newClient: Client = {
+      id: socket.id,
+      type: clientType,
+      name: clientName,
+      state: {
+        ...info.state,
+        timestamp: Date.now(),
+      },
+    };
+    clients.push(newClient);
+  
+    // Enviar lista de TVs cuando se conecta un TV o un controlador
+    if (clientType === "tv" || clientType === "controller") {
+      const tvList = clients
+        .filter((c) => c.type === "tv")
+        .map((tv) => ({
+          id: tv.id,
+          name: tv.name,
+          state: tv.state,
+          isHost: tv.isHost || false,
+        }));
+  
+      // Si es un TV, notificar a todos los controladores
+      if (clientType === "tv") {
+        const controllers = clients.filter((c) => c.type === "controller");
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit("tvListUpdate", tvList);
+        });
+      }
+  
+      // Si es un TV y no hay host, seleccionarlo como host
+      if (clientType === "tv" && !hostTvId) {
+        const newClient = clients[clients.length - 1];
+        hostTvId = newClient.id;
+        newClient.isHost = true;
+        io.emit("hostUpdate", { hostId: newClient.id });
+      }
+  
+      // Si es un controlador, enviar la lista actual solo a este controlador
+      else if (clientType === "controller") {
+        io.to(socket.id).emit("tvListUpdate", tvList);
       }
     }
   });
