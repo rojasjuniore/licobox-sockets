@@ -143,34 +143,35 @@ const handleClientRemoval = (client: Client, state: any) => {
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
   let heartbeatTimeout: NodeJS.Timeout;
-  let heartbeatInterval!: NodeJS.Timeout;
+  let heartbeatInterval: NodeJS.Timeout;
 
   const setupHeartbeat = () => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
     if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
 
     heartbeatInterval = setInterval(() => {
-      const timestamp = Date.now();
-      socket.emit("ping", { timestamp });
+      const now = Date.now();
+      
+      // Verificar si el cliente sigue activo
+      if (now - lastHeartbeat > INACTIVE_TIMEOUT) {
+        console.warn(`Client ${socket.id} inactive, disconnecting...`);
+        socket.disconnect(true);
+        return;
+      }
+
+      socket.emit("ping", { timestamp: now });
 
       heartbeatTimeout = setTimeout(() => {
-        const client = clients.find((c) => c.id === socket.id);
-        if (
-          client &&
-          Date.now() - (client.state?.timestamp || 0) > HEARTBEAT_TIMEOUT
-        ) {
+        const timeSinceLastHeartbeat = Date.now() - lastHeartbeat;
+        if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT) {
           console.warn(
-            `Client ${socket.id} heartbeat timeout, attempting reconnection...`
+            `Client ${socket.id} heartbeat timeout (${timeSinceLastHeartbeat}ms), reconnecting...`
           );
           socket.disconnect(true);
         }
       }, HEARTBEAT_TIMEOUT);
     }, HEARTBEAT_INTERVAL);
   };
-
-  socket.on("pong", () => {
-    lastHeartbeat = Date.now();
-  });
 
   socket.on("heartbeat", (data) => {
     lastHeartbeat = Date.now();
@@ -180,8 +181,12 @@ io.on("connection", (socket) => {
         ...client.state,
         ...data.state,
         timestamp: Date.now(),
+        lastHeartbeat: Date.now(),
       };
     }
+    
+    // Responder inmediatamente con un pong
+    socket.emit("pong", { timestamp: Date.now() });
   });
 
   setupHeartbeat();
