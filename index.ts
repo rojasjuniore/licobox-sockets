@@ -16,6 +16,7 @@ interface Client {
     playlist?: any[];
     currentSong?: number;
     timestamp?: number; // Add this line
+    lastStateReceived: number;
   };
 }
 
@@ -66,7 +67,7 @@ const io = new Server(httpServer, {
   },
   pingTimeout: 60000,
   pingInterval: 25000,
-  transports: ['websocket', 'polling'],
+  transports: ["websocket", "polling"],
   allowEIO3: true,
   connectTimeout: 45000,
 });
@@ -75,7 +76,6 @@ const clients: Client[] = [];
 let currentState: PlaybackState | null = null;
 let syncEnabled = false;
 let hostTvId: string | null = null; // Para trackear el TV host actual
-
 
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
@@ -95,17 +95,17 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     clearInterval(heartbeatInterval);
-    
+
     // Verificar si el cliente realmente existe antes de procesarlo
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
-      
+
       // Esperar un breve momento para ver si es una reconexión rápida
       setTimeout(() => {
         // Verificar si el cliente aún está en la lista (podría haberse reconectado)
-        const stillDisconnected = !clients.some(c => c.id === socket.id);
-        
+        const stillDisconnected = !clients.some((c) => c.id === socket.id);
+
         if (stillDisconnected) {
           clients.splice(index, 1);
 
@@ -380,6 +380,17 @@ io.on("connection", (socket) => {
     });
   });
 
+  socket.on("stateReceived", (data: { tvId: string; timestamp: number }) => {
+    const tv = clients.find((c) => c.id === data.tvId);
+    if (tv) {
+      tv.state = {
+        ...tv.state,
+        lastStateReceived: data.timestamp,
+      };
+    }
+  });
+
+  // Modificar el handler de tvStateUpdate
   socket.on("tvStateUpdate", (state) => {
     const client = clients.find((c) => c.id === state.tvId);
     if (client) {
@@ -389,12 +400,12 @@ io.on("connection", (socket) => {
         timestamp: Date.now(),
       };
 
-      // Notify all controllers about the update
+      // Notificar a los controladores
       const controllers = clients.filter((c) => c.type === "controller");
       controllers.forEach((controller) => {
-        io.to(controller.id).emit("tvStateUpdate", {
-          tvId: state.tvId,
-          state: client.state,
+        io.to(controller.id).emit("currentState", {
+          ...state,
+          timestamp: Date.now(),
         });
       });
     }
