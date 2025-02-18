@@ -255,32 +255,34 @@ io.on("connection", (socket) => {
   });
 
   // Eliminar el segundo manejador de command y unificar la lógica
+  // Modificar el handler de command
   socket.on("command", (command) => {
     if (command.action === "play" || command.action === "pause") {
       if (currentState) {
         currentState.isPlaying = command.action === "play";
         currentState.timestamp = Date.now();
       }
-
-      // Emitir un evento específico para cambios de reproducción
-      const targetTvIds =
-        command.tvIds ||
+  
+      // Asegurarse de que el comando llegue a todos los TVs afectados
+      const targetTvIds = command.tvIds || 
         clients.filter((c) => c.type === "tv").map((tv) => tv.id);
-
+  
+      const playbackState = {
+        isPlaying: command.action === "play",
+        timestamp: Date.now(),
+        forceUpdate: true, // Forzar actualización
+        sourceId: socket.id // Identificar la fuente del comando
+      };
+  
+      // Emitir a TVs
       targetTvIds.forEach((tvId: string) => {
-        io.to(tvId).emit("playbackUpdate", {
-          isPlaying: command.action === "play",
-          timestamp: Date.now(),
-        });
+        io.to(tvId).emit("playbackUpdate", playbackState);
       });
-
-      // Notificar a los controladores con un evento específico
+  
+      // Notificar a todos los controladores
       const controllers = clients.filter((c) => c.type === "controller");
       controllers.forEach((controller) => {
-        io.to(controller.id).emit("playbackUpdate", {
-          isPlaying: command.action === "play",
-          timestamp: Date.now(),
-        });
+        io.to(controller.id).emit("playbackUpdate", playbackState);
       });
       return;
     }
@@ -428,45 +430,23 @@ io.on("connection", (socket) => {
       const timestamp = Date.now();
       const stateTimestamp = state.state?.timestamp || timestamp;
 
-      // Solo actualizar si el estado es más reciente o viene del host
-      if (
-        client.isHost ||
-        !client.state?.timestamp ||
-        stateTimestamp > client.state.timestamp
-      ) {
+      // Validar el estado de reproducción
+      if (state.state?.isPlaying !== undefined) {
         client.state = {
           ...client.state,
           ...state.state,
           timestamp: stateTimestamp,
+          lastStateUpdate: timestamp
         };
-
-        // Si es el host, actualizar el estado global
-        if (client.isHost) {
-          currentState = {
-            ...currentState,
-            ...state.state,
-            timestamp: stateTimestamp,
-            tvId: state.tvId,
-            stateSequence: (currentState?.stateSequence || 0) + 1,
-          } as PlaybackState;
-
-          // Propagar el estado a otros TVs para mantener sincronización
-          const otherTvs = clients.filter(
-            (c) => c.type === "tv" && c.id !== state.tvId
-          );
-          otherTvs.forEach((tv) => {
-            io.to(tv.id).emit("syncState", currentState);
-          });
-        }
-
-        // Notificar a los controladores
+  
+        // Propagar el estado a los controladores
         const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
           io.to(controller.id).emit("currentState", {
             ...state,
             timestamp: stateTimestamp,
             isHost: client.isHost,
-            stateSequence: currentState?.stateSequence,
+            stateSequence: currentState?.stateSequence
           });
         });
       }
