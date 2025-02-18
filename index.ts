@@ -280,14 +280,29 @@ io.on("connection", (socket) => {
     if (command.action === "play" || command.action === "pause") {
       const targetTV = clients.find((c) => c.id === command.tvIds[0]);
 
-      // No permitir play si está en buffer
-      if (command.action === "play" && targetTV?.state?.isBuffering) {
+      // No cambiar estado si está en buffer
+      if (targetTV?.state?.isBuffering) {
         return;
       }
 
-      if (currentState) {
-        currentState.isPlaying = command.action === "play";
-        currentState.timestamp = Date.now();
+      if (currentState?.isPlaying !== (command.action === "play")) {
+        currentState = {
+          ...currentState,
+          isPlaying: command.action === "play",
+          timestamp: Date.now(),
+        } as PlaybackState;
+
+        const playbackState = {
+          isPlaying: command.action === "play",
+          timestamp: Date.now(),
+          forceUpdate: true,
+          sourceId: socket.id,
+        };
+
+        // Emitir a TVs afectados
+        command.tvIds?.forEach((tvId: string) => {
+          io.to(tvId).emit("playbackUpdate", playbackState);
+        });
       }
 
       // Asegurarse de que el comando llegue a todos los TVs afectados
