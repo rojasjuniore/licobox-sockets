@@ -344,15 +344,21 @@ io.on("connection", (socket) => {
 
   // Modificar el handler de tvStateUpdate
   socket.on("tvStateUpdate", (state) => {
+    // Validar que state y state.state existan
+    if (!state || !state.state) {
+      console.error("Invalid state object received:", state);
+      return;
+    }
+  
     const tvClient = clients.find(c => c.id === state.tvId || socket.id);
     if (tvClient) {
-      // Update state with proper typing
+      // Update state with proper typing and default values
       tvClient.state = {
-        currentTime: state.state.currentTime,
-        duration: state.state.duration,
-        isPlaying: state.state.isPlaying,
-        playlist: state.state.playlist,
-        currentSong: state.state.currentSong,
+        currentTime: state.state.currentTime || 0,
+        duration: state.state.duration || 0,
+        isPlaying: state.state.isPlaying || false,
+        playlist: state.state.playlist || [],
+        currentSong: state.state.currentSong || 0,
         timestamp: Date.now()
       };
   
@@ -360,11 +366,11 @@ io.on("connection", (socket) => {
       if (tvClient.isHost && currentState) {
         currentState = {
           ...currentState,
-          currentTime: state.state.currentTime,
-          duration: state.state.duration,
-          isPlaying: state.state.isPlaying,
-          playlist: state.state.playlist,
-          currentIndex: state.state.currentSong,
+          currentTime: state.state.currentTime || 0,
+          duration: state.state.duration || 0,
+          isPlaying: state.state.isPlaying || false,
+          playlist: state.state.playlist || [],
+          currentIndex: state.state.currentSong || 0,
           timestamp: Date.now()
         };
       }
@@ -376,11 +382,11 @@ io.on("connection", (socket) => {
       safeEmit(io.to(controller.id), "tvStateUpdate", {
         tvId: state.tvId || socket.id,
         state: {
-          currentTime: state.state.currentTime,
-          duration: state.state.duration,
-          isPlaying: state.state.isPlaying,
-          playlist: state.state.playlist,
-          currentSong: state.state.currentSong,
+          currentTime: state.state.currentTime || 0,
+          duration: state.state.duration || 0,
+          isPlaying: state.state.isPlaying || false,
+          playlist: state.state.playlist || [],
+          currentSong: state.state.currentSong || 0,
           timestamp: Date.now()
         }
       });
