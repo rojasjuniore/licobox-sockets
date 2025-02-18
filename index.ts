@@ -297,8 +297,11 @@ io.on("connection", (socket) => {
       clients.filter((c) => c.type === "tv").map((tv) => tv.id);
 
     // Verificar buffer solo para comandos de reproducción
-    if (command.action === "play" || command.action === "pause") {
-      const targetTV = clients.find((c) => c.id === command.tvIds?.[0]);
+    if (
+      (command.action === "play" || command.action === "pause") &&
+      command.tvIds?.length > 0
+    ) {
+      const targetTV = clients.find((c) => c.id === command.tvIds[0]);
       if (targetTV?.state?.isBuffering && targetTV?.state?.bufferLevel! < 0.1) {
         socket.emit("error", {
           message: "Buffer insuficiente para reproducir",
@@ -306,19 +309,6 @@ io.on("connection", (socket) => {
         });
         return;
       }
-    }
-
-    // Actualizar el estado actual para comandos relevantes
-    if (
-      command.action === "changeSong" ||
-      command.action === "updatePlaylist" ||
-      command.action === "forceSync"
-    ) {
-      currentState = {
-        ...currentState,
-        ...command,
-        timestamp: now,
-      } as PlaybackState;
     }
 
     // Enviar comando a los TVs
@@ -329,6 +319,27 @@ io.on("connection", (socket) => {
         synchronized: syncEnabled || command.action === "forceSync",
       });
     });
+
+    // Actualizar el estado actual para comandos relevantes
+    if (
+      command.action === "play" ||
+      command.action === "pause" ||
+      command.action === "changeSong" ||
+      command.action === "updatePlaylist" ||
+      command.action === "forceSync"
+    ) {
+      currentState = {
+        ...currentState,
+        ...command,
+        timestamp: now,
+        isPlaying:
+          command.action === "play"
+            ? true
+            : command.action === "pause"
+            ? false
+            : currentState?.isPlaying,
+      } as PlaybackState;
+    }
 
     // Actualizar otros controladores
     const otherControllers = clients.filter(
