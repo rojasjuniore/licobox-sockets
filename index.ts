@@ -22,6 +22,7 @@ const io = new Server(httpServer, {
   },
 });
 
+// Update the Client interface to include timestamp
 interface Client {
   id: string;
   type: "controller" | "tv";
@@ -33,6 +34,7 @@ interface Client {
     isPlaying?: boolean;
     playlist?: any[];
     currentSong?: number;
+    timestamp?: number;  // Add this line
   };
 }
 
@@ -344,29 +346,43 @@ io.on("connection", (socket) => {
   socket.on("tvStateUpdate", (state) => {
     const tvClient = clients.find(c => c.id === state.tvId || socket.id);
     if (tvClient) {
+      // Update state with proper typing
       tvClient.state = {
-        ...tvClient.state,
-        ...state.state,
-        timestamp: Date.now(),
+        currentTime: state.state.currentTime,
+        duration: state.state.duration,
+        isPlaying: state.state.isPlaying,
+        playlist: state.state.playlist,
+        currentSong: state.state.currentSong,
+        timestamp: Date.now()
       };
-
-      // Actualizar el estado global si es necesario
-      if (tvClient.isHost) {
+  
+      // Update global state if host
+      if (tvClient.isHost && currentState) {
         currentState = {
           ...currentState,
-          ...state.state,
-          timestamp: Date.now(),
+          currentTime: state.state.currentTime,
+          duration: state.state.duration,
+          isPlaying: state.state.isPlaying,
+          playlist: state.state.playlist,
+          currentIndex: state.state.currentSong,
+          timestamp: Date.now()
         };
       }
     }
-
-    // Enviar actualización a los controladores
+  
+    // Send update to controllers with proper typing
     const controllers = clients.filter(c => c.type === "controller");
     controllers.forEach(controller => {
       safeEmit(io.to(controller.id), "tvStateUpdate", {
         tvId: state.tvId || socket.id,
-        state: state.state,
-        timestamp: Date.now(),
+        state: {
+          currentTime: state.state.currentTime,
+          duration: state.state.duration,
+          isPlaying: state.state.isPlaying,
+          playlist: state.state.playlist,
+          currentSong: state.state.currentSong,
+          timestamp: Date.now()
+        }
       });
     });
   });
