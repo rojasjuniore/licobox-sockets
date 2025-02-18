@@ -223,7 +223,7 @@ io.on("connection", (socket) => {
     socket.emit("pong", { timestamp: Date.now() });
   });
 
-  setupHeartbeat();
+  // setupHeartbeat();
 
   socket.on("disconnect", (reason) => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
