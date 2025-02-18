@@ -133,11 +133,22 @@ io.on("connection", (socket) => {
     });
   });
 
+  // Eliminar el segundo manejador de command y unificar la lógica
   socket.on("command", (command) => {
+    if (command.action === "play" || command.action === "pause") {
+      if (hostTvId) {
+        io.to(hostTvId).emit("command", {
+          ...command,
+          timestamp: Date.now(),
+        });
+      }
+      return;
+    }
+  
     const targetTvIds =
       command.tvIds ||
       clients.filter((c) => c.type === "tv").map((tv) => tv.id);
-
+  
     if (
       command.action === "changeSong" ||
       command.action === "updatePlaylist" ||
@@ -149,7 +160,7 @@ io.on("connection", (socket) => {
         timestamp: Date.now(),
       } as PlaybackState;
     }
-
+  
     // Si la sincronización está activada o es un comando de sincronización forzada
     if (syncEnabled || command.action === "forceSync") {
       // Enviar a todos los TVs
@@ -169,7 +180,7 @@ io.on("connection", (socket) => {
         });
       });
     }
-
+  
     // Actualizar otros controladores
     const otherControllers = clients.filter(
       (c) => c.type === "controller" && c.id !== socket.id
@@ -302,6 +313,14 @@ io.on("connection", (socket) => {
   });
 
   // Modificar el handler de tvStateUpdate
+  // Función helper para emisiones seguras
+  const safeEmit = (socket: any, event: string, data: any) => {
+    try {
+      socket.emit(event, data);
+    } catch (error) {
+      console.error(`Error emitting ${event}:`, error);
+    }
+  };
   socket.on("tvStateUpdate", (state) => {
     // Actualizar el estado del TV en la lista de clientes
     const tvClient = clients.find(c => c.id === state.tvId || socket.id);
@@ -313,7 +332,7 @@ io.on("connection", (socket) => {
     // Notificar a los controladores
     const controllers = clients.filter(c => c.type === "controller");
     controllers.forEach(controller => {
-      io.to(controller.id).emit("tvStateUpdate", {
+      safeEmit(io.to(controller.id), "tvStateUpdate", {
         ...state,
         tvId: state.tvId || socket.id
       });
@@ -335,65 +354,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("command", (command) => {
-    if (command.action === "play" || command.action === "pause") {
-      // Enviar comando al master TV
-      if (hostTvId) {
-        io.to(hostTvId).emit("command", {
-          ...command,
-          timestamp: Date.now(),
-        });
-      }
-    } else {
-      // Otros comandos siguen la lógica existente
-      const targetTvIds =
-        command.tvIds ||
-        clients.filter((c) => c.type === "tv").map((tv) => tv.id);
 
-      if (
-        command.action === "changeSong" ||
-        command.action === "updatePlaylist" ||
-        command.action === "forceSync"
-      ) {
-        currentState = {
-          ...currentState,
-          ...command,
-          timestamp: Date.now(),
-        } as PlaybackState;
-      }
-
-      // Si la sincronización está activada o es un comando de sincronización forzada
-      if (syncEnabled || command.action === "forceSync") {
-        // Enviar a todos los TVs
-        targetTvIds.forEach((tvId: any) => {
-          io.to(tvId).emit("command", {
-            ...command,
-            timestamp: Date.now(),
-            synchronized: true,
-          });
-        });
-      } else {
-        // Enviar solo a los TVs especificados
-        targetTvIds.forEach((tvId: any) => {
-          io.to(tvId).emit("command", {
-            ...command,
-            timestamp: Date.now(),
-          });
-        });
-      }
-
-      // Actualizar otros controladores
-      const otherControllers = clients.filter(
-        (c) => c.type === "controller" && c.id !== socket.id
-      );
-      otherControllers.forEach((controller) => {
-        io.to(controller.id).emit("currentState", {
-          ...currentState,
-          tvIds: targetTvIds,
-        });
-      });
-    }
-  });
 
   socket.on("reconnect", (attemptNumber) => {
     // Restaurar estado del cliente
