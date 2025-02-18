@@ -42,6 +42,7 @@ interface PlaybackState {
   isBuffering: boolean;
   networkLatency: number;
   masterTimestamp?: number;
+  adjustedTime?: number;
 }
 
 interface SyncState extends PlaybackState {
@@ -427,18 +428,23 @@ io.on("connection", (socket) => {
 
   // Nuevo handler para sincronización de estado
   socket.on("syncState", (state: PlaybackState) => {
-    currentState = { ...state, timestamp: Date.now() };
+    const now = Date.now();
+    const networkLatency = (now - state.timestamp) / 2;
 
-    // Propagar el estado a todos los TVs excepto al emisor
+    currentState = {
+      ...state,
+      timestamp: now,
+      networkLatency,
+      adjustedTime: state.currentTime + networkLatency / 1000,
+    };
+
+    // Propagar a otros TVs con el tiempo ajustado
     const tvs = clients.filter((c) => c.type === "tv" && c.id !== socket.id);
     tvs.forEach((tv) => {
-      io.to(tv.id).emit("syncState", currentState);
-    });
-
-    // Informar a los controladores
-    const controllers = clients.filter((c) => c.type === "controller");
-    controllers.forEach((controller) => {
-      io.to(controller.id).emit("currentState", currentState);
+      io.to(tv.id).emit("syncState", {
+        ...currentState,
+        adjustedTime: currentState?.adjustedTime,
+      });
     });
   });
 
@@ -591,11 +597,17 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("reconnect", (attemptNumber) => {
-    // Restaurar estado del cliente
+  socket.on("reconnect", async (attemptNumber) => {
     const client = clients.find((c) => c.id === socket.id);
-    if (client) {
-      socket.emit("restoreState", currentState);
+    if (client?.type === "tv") {
+      // Solicitar estado actualizado al host
+      const hostTV = clients.find((c) => c.isHost);
+      if (hostTV) {
+        io.to(hostTV.id).emit("requestFullState", {
+          targetTvId: socket.id,
+          timestamp: Date.now(),
+        });
+      }
     }
   });
 
