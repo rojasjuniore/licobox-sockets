@@ -291,9 +291,14 @@ io.on("connection", (socket) => {
   socket.on("command", (command) => {
     const now = Date.now();
 
+    // Obtener los TVs objetivo
+    const targetTvIds =
+      command.tvIds ||
+      clients.filter((c) => c.type === "tv").map((tv) => tv.id);
+
+    // Verificar buffer solo para comandos de reproducción
     if (command.action === "play" || command.action === "pause") {
-      // Verificar buffer antes de cambiar estado
-      const targetTV = clients.find((c) => c.id === command.tvIds[0]);
+      const targetTV = clients.find((c) => c.id === command.tvIds?.[0]);
       if (targetTV?.state?.isBuffering && targetTV?.state?.bufferLevel! < 0.1) {
         socket.emit("error", {
           message: "Buffer insuficiente para reproducir",
@@ -301,55 +306,41 @@ io.on("connection", (socket) => {
         });
         return;
       }
-
-      const targetTvIds =
-        command.tvIds ||
-        clients.filter((c) => c.type === "tv").map((tv) => tv.id);
-
-      if (
-        command.action === "changeSong" ||
-        command.action === "updatePlaylist" ||
-        command.action === "forceSync"
-      ) {
-        currentState = {
-          ...currentState,
-          ...command,
-          timestamp: Date.now(),
-        } as PlaybackState;
-      }
-
-      // Si la sincronización está activada o es un comando de sincronización forzada
-      if (syncEnabled || command.action === "forceSync") {
-        // Enviar a todos los TVs
-        targetTvIds.forEach((tvId: any) => {
-          io.to(tvId).emit("command", {
-            ...command,
-            timestamp: Date.now(),
-            synchronized: true,
-          });
-        });
-      } else {
-        // Enviar solo a los TVs especificados
-        targetTvIds.forEach((tvId: any) => {
-          io.to(tvId).emit("command", {
-            ...command,
-            timestamp: Date.now(),
-          });
-        });
-      }
-
-      // Actualizar otros controladores
-      const otherControllers = clients.filter(
-        (c) => c.type === "controller" && c.id !== socket.id
-      );
-
-      otherControllers.forEach((controller) => {
-        io.to(controller.id).emit("currentState", {
-          ...currentState,
-          tvIds: targetTvIds,
-        });
-      });
     }
+
+    // Actualizar el estado actual para comandos relevantes
+    if (
+      command.action === "changeSong" ||
+      command.action === "updatePlaylist" ||
+      command.action === "forceSync"
+    ) {
+      currentState = {
+        ...currentState,
+        ...command,
+        timestamp: now,
+      } as PlaybackState;
+    }
+
+    // Enviar comando a los TVs
+    targetTvIds.forEach((tvId: any) => {
+      io.to(tvId).emit("command", {
+        ...command,
+        timestamp: now,
+        synchronized: syncEnabled || command.action === "forceSync",
+      });
+    });
+
+    // Actualizar otros controladores
+    const otherControllers = clients.filter(
+      (c) => c.type === "controller" && c.id !== socket.id
+    );
+
+    otherControllers.forEach((controller) => {
+      io.to(controller.id).emit("currentState", {
+        ...currentState,
+        tvIds: targetTvIds,
+      });
+    });
   });
 
   // Nuevo handler para sincronización de estado
