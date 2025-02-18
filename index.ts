@@ -189,7 +189,7 @@ io.on("connection", (socket) => {
       // Verificar si el cliente sigue activo
       if (now - lastHeartbeat > INACTIVE_TIMEOUT) {
         console.warn(`Client ${socket.id} inactive, disconnecting...`);
-        socket.disconnect(true);
+        //ocket.disconnect(true);
         return;
       }
 
@@ -201,7 +201,7 @@ io.on("connection", (socket) => {
           console.warn(
             `Client ${socket.id} heartbeat timeout (${timeSinceLastHeartbeat}ms), reconnecting...`
           );
-          socket.disconnect(true);
+          //socket.disconnect(true);
         }
       }, HEARTBEAT_TIMEOUT);
     }, HEARTBEAT_INTERVAL);
@@ -223,7 +223,7 @@ io.on("connection", (socket) => {
     socket.emit("pong", { timestamp: Date.now() });
   });
 
-  // setupHeartbeat();
+  setupHeartbeat();
 
   socket.on("disconnect", (reason) => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
