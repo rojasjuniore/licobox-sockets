@@ -17,6 +17,7 @@ interface Client {
     currentSong?: number;
     timestamp?: number; // Add this line
     lastStateReceived?: number;
+    lastBufferUpdate?: number;
     bufferLevel?: number;
     isBuffering?: boolean;
   };
@@ -142,39 +143,41 @@ io.on("connection", (socket) => {
   // Modificar el manejo de desconexión y reconexión
   socket.on("disconnect", () => {
     clearInterval(heartbeatInterval);
-  
+
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
       const disconnectedClient = clients[index];
       const clientState = { ...disconnectedClient.state }; // Guardar estado antes de remover
-      
+
       // Remover cliente
       clients.splice(index, 1);
-  
+
       if (disconnectedClient.type === "tv") {
         // Guardar el estado actual antes de la desconexión
         if (currentState && disconnectedClient.id === currentState.tvId) {
           const savedState = {
             ...currentState,
             lastKnownState: clientState,
-            disconnectedAt: Date.now()
+            disconnectedAt: Date.now(),
           };
-          
+
           // Mantener el estado por un tiempo limitado para reconexión
           setTimeout(() => {
-            const reconnected = clients.some(c => c.id === disconnectedClient.id);
+            const reconnected = clients.some(
+              (c) => c.id === disconnectedClient.id
+            );
             if (!reconnected) {
               currentState = null;
             }
           }, 30000); // 30 segundos de gracia
         }
-  
+
         // Notificar a controladores
         const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
           io.to(controller.id).emit("tvDisconnected", {
             tvId: disconnectedClient.id,
-            state: clientState
+            state: clientState,
           });
         });
       }
@@ -184,21 +187,40 @@ io.on("connection", (socket) => {
   socket.on("bufferState", (data: any) => {
     const client = clients.find((c) => c.id === data.tvId);
     if (client) {
+      // Actualizar estado del cliente
       client.state = {
         ...client.state,
         isBuffering: data.isBuffering,
         bufferLevel: data.bufferLevel,
-        timestamp: data.timestamp,
+        timestamp: Date.now(),
+        lastBufferUpdate: Date.now(),
       };
 
-      // Notificar a los controladores
+      // Si el buffer está muy bajo, solicitar estado actualizado
+      if (data.bufferLevel < 0.1) {
+        // 10%
+        const existingTVs = clients.filter(
+          (c) =>
+            c.type === "tv" &&
+            c.id !== data.tvId &&
+            (c.state?.bufferLevel || 0) > 0.5
+        );
+
+        if (existingTVs.length > 0) {
+          // Solicitar estado a un TV con buen buffer
+          io.to(existingTVs[0].id).emit("requestFullState", {
+            targetTvId: data.tvId,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      // Notificar a controladores
       const controllers = clients.filter((c) => c.type === "controller");
       controllers.forEach((controller) => {
         io.to(controller.id).emit("bufferUpdate", {
-          tvId: data.tvId,
-          isBuffering: data.isBuffering,
-          bufferLevel: data.bufferLevel,
-          timestamp: data.timestamp,
+          ...data,
+          timestamp: Date.now(),
         });
       });
     }
@@ -552,14 +574,18 @@ io.on("connection", (socket) => {
 
   socket.on("reconnect_attempt", (attemptNumber) => {
     console.log(
-      `Client ${socket.id} attempting to reconnect (attempt ${attemptNumber})`
+      `Reconnection attempt ${attemptNumber} for client ${socket.id}`
     );
-    const client = clients.find((c) => c.id === socket.id);
-    if (client?.type === "tv" && currentState) {
-      socket.emit("syncState", {
-        ...currentState,
+
+    // Si es un TV intentando reconectar
+    const previousState =
+      currentState?.tvId === socket.id ? currentState : null;
+
+    if (previousState) {
+      socket.emit("restoreState", {
+        ...previousState,
         timestamp: Date.now(),
-        forceSync: true,
+        forceRestore: true,
       });
     }
   });
