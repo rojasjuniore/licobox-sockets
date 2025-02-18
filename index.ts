@@ -374,20 +374,36 @@ io.on("connection", (socket) => {
   socket.on("tvStateUpdate", (state) => {
     const client = clients.find((c) => c.id === state.tvId);
     if (client) {
-      client.state = {
-        ...client.state,
-        ...state.state,
-        timestamp: Date.now(),
-      };
+      const timestamp = Date.now();
 
-      // Notificar a los controladores
-      const controllers = clients.filter((c) => c.type === "controller");
-      controllers.forEach((controller) => {
-        io.to(controller.id).emit("currentState", {
-          ...state,
-          timestamp: Date.now(),
+      // Verificar si el estado es más reciente que el último recibido
+      if (!client.state?.timestamp || timestamp > client.state.timestamp) {
+        client.state = {
+          ...client.state,
+          ...state.state,
+          timestamp,
+        };
+
+        // Actualizar el estado global si es el host
+        if (client.isHost) {
+          currentState = {
+            ...currentState,
+            ...state.state,
+            timestamp,
+            tvId: state.tvId,
+          } as PlaybackState;
+        }
+
+        // Notificar a los controladores
+        const controllers = clients.filter((c) => c.type === "controller");
+        controllers.forEach((controller) => {
+          io.to(controller.id).emit("currentState", {
+            ...state,
+            timestamp,
+            isHost: client.isHost,
+          });
         });
-      });
+      }
     }
   });
 
