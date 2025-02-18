@@ -110,6 +110,46 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     clearInterval(heartbeatInterval);
+    
+    // Verificar si el cliente realmente existe antes de procesarlo
+    const index = clients.findIndex((c) => c.id === socket.id);
+    if (index !== -1) {
+      const disconnectedClient = clients[index];
+      
+      // Esperar un breve momento para ver si es una reconexión rápida
+      setTimeout(() => {
+        // Verificar si el cliente aún está en la lista (podría haberse reconectado)
+        const stillDisconnected = !clients.some(c => c.id === socket.id);
+        
+        if (stillDisconnected) {
+          clients.splice(index, 1);
+
+          if (disconnectedClient.type === "tv") {
+            // Notify controllers about TV disconnection
+            const controllers = clients.filter((c) => c.type === "controller");
+            controllers.forEach((controller) => {
+              io.to(controller.id).emit("tvDisconnected", {
+                tvId: disconnectedClient.id,
+              });
+            });
+
+            // Update TV list for all controllers
+            const tvList = clients
+              .filter((c) => c.type === "tv")
+              .map((tv) => ({
+                id: tv.id,
+                name: tv.name,
+                state: tv.state,
+                isHost: tv.isHost || false,
+              }));
+
+            controllers.forEach((controller) => {
+              io.to(controller.id).emit("tvListUpdate", tvList);
+            });
+          }
+        }
+      }, 1000); // Esperar 1 segundo para ver si es una reconexión rápida
+    }
   });
   // Modificar el evento identify
   socket.on("identify", (info) => {
