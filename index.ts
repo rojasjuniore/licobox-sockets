@@ -34,7 +34,7 @@ interface Client {
     isPlaying?: boolean;
     playlist?: any[];
     currentSong?: number;
-    timestamp?: number;  // Add this line
+    timestamp?: number; // Add this line
   };
 }
 
@@ -94,42 +94,28 @@ io.on("connection", (socket) => {
         id: socket.id,
         type: clientType,
         name: clientName,
-        state: info.state || {},
+        state: {
+          ...info.state,
+          timestamp: Date.now(),
+        },
       };
       clients.push(newClient);
 
-      // Notificar a los controladores sobre el nuevo TV
+      // Solo enviar actualización de lista cuando se conecta/desconecta un TV
       if (clientType === "tv") {
+        const tvList = clients
+          .filter((c) => c.type === "tv")
+          .map((tv) => ({
+            id: tv.id,
+            name: tv.name,
+            state: tv.state,
+            isHost: tv.isHost || false,
+          }));
+
         const controllers = clients.filter((c) => c.type === "controller");
         controllers.forEach((controller) => {
-          io.to(controller.id).emit(
-            "tvListUpdate",
-            clients
-              .filter((c) => c.type === "tv")
-              .map((tv) => ({
-                id: tv.id,
-                name: tv.name,
-                state: tv.state,
-                isHost: tv.isHost || false,
-              }))
-          );
+          io.to(controller.id).emit("tvListUpdate", tvList);
         });
-      }
-
-      // Enviar lista de TVs al nuevo controlador
-      if (clientType === "controller") {
-        socket.emit(
-          "tvListUpdate",
-          clients
-            .filter((c) => c.type === "tv")
-            .map((tv) => ({
-              id: tv.id,
-              name: tv.name,
-              state: tv.state,
-              isHost: tv.isHost || false,
-            }))
-        );
-        socket.emit("syncStatus", syncEnabled);
       }
     }
   });
@@ -349,8 +335,8 @@ io.on("connection", (socket) => {
       console.error("Invalid state object received:", state);
       return;
     }
-  
-    const tvClient = clients.find(c => c.id === state.tvId || socket.id);
+
+    const tvClient = clients.find((c) => c.id === state.tvId || socket.id);
     if (tvClient) {
       // Update state with proper typing and default values
       tvClient.state = {
@@ -359,9 +345,9 @@ io.on("connection", (socket) => {
         isPlaying: state.state.isPlaying || false,
         playlist: state.state.playlist || [],
         currentSong: state.state.currentSong || 0,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
-  
+
       // Update global state if host
       if (tvClient.isHost && currentState) {
         currentState = {
@@ -371,14 +357,14 @@ io.on("connection", (socket) => {
           isPlaying: state.state.isPlaying || false,
           playlist: state.state.playlist || [],
           currentIndex: state.state.currentSong || 0,
-          timestamp: Date.now()
+          timestamp: Date.now(),
         };
       }
     }
-  
-    // Send update to controllers with proper typing
-    const controllers = clients.filter(c => c.type === "controller");
-    controllers.forEach(controller => {
+
+    // Enviar solo actualización de estado sin actualizar la lista completa de TVs
+    const controllers = clients.filter((c) => c.type === "controller");
+    controllers.forEach((controller) => {
       safeEmit(io.to(controller.id), "tvStateUpdate", {
         tvId: state.tvId || socket.id,
         state: {
@@ -387,8 +373,8 @@ io.on("connection", (socket) => {
           isPlaying: state.state.isPlaying || false,
           playlist: state.state.playlist || [],
           currentSong: state.state.currentSong || 0,
-          timestamp: Date.now()
-        }
+          timestamp: Date.now(),
+        },
       });
     });
   });
