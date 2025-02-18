@@ -50,22 +50,13 @@ app.use(cors());
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: [
-      "http://localhost:4200",
-      "http://localhost:3001",
-      "http://localhost:5173",
-      "https://licobox-sockets-production.up.railway.app",
-      "https://licobox-sockets-production.up.railway.app:6533",
-    ],
+    origin: "*",
     methods: ["GET", "POST"],
-    credentials: true,
-    allowedHeaders: ["*"],
   },
   pingTimeout: 60000,
   pingInterval: 25000,
+  connectTimeout: 30000,
   transports: ["websocket", "polling"],
-  allowEIO3: true,
-  connectTimeout: 45000,
 });
 
 const clients: Client[] = [];
@@ -113,15 +104,26 @@ const selectNewHost = () => {
 
 io.on("connection", (socket) => {
   let lastHeartbeat = Date.now();
+  let heartbeatTimeout: NodeJS.Timeout;
+  let heartbeatInterval!: NodeJS.Timeout;
 
-  const heartbeatInterval = setInterval(() => {
-    if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
-      console.warn(`Client ${socket.id} heartbeat timeout`);
-      socket.disconnect(true);
-    } else {
+  const setupHeartbeat = () => {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
+
+    heartbeatInterval = setInterval(() => {
       socket.emit("ping");
-    }
-  }, HEARTBEAT_INTERVAL);
+
+      heartbeatTimeout = setTimeout(() => {
+        if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
+          console.warn(
+            `Client ${socket.id} heartbeat timeout, reconnecting...`
+          );
+          socket.disconnect(true);
+        }
+      }, HEARTBEAT_TIMEOUT);
+    }, HEARTBEAT_INTERVAL);
+  };
 
   socket.on("pong", () => {
     lastHeartbeat = Date.now();
@@ -139,10 +141,11 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Modificar el evento disconnect
-  // Modificar el manejo de desconexión y reconexión
+  setupHeartbeat();
+
   socket.on("disconnect", () => {
-    clearInterval(heartbeatInterval);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
 
     const index = clients.findIndex((c) => c.id === socket.id);
     if (index !== -1) {
